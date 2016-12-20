@@ -151,8 +151,8 @@ public class HmeServer {
 
             Path tempDirectory = Files.createTempDirectory("");
 
-            Path inputSvgFile = tempDirectory.resolve("input.svg"); //Files.createTempFile("", ".svg");
-            Path outputSvgPath = tempDirectory.resolve("output.jpg"); //Files.createTempFile("", ".jpg");
+            Path inputSvgFile = tempDirectory.resolve("input.svg");
+            Path outputSvgPath = tempDirectory.resolve("output.jpg");
 
             Files.copy(exchange.getInputStream(), inputSvgFile);
 
@@ -182,10 +182,8 @@ public class HmeServer {
             }
 
         } catch (Exception e) {
-
             e.printStackTrace();
-            exchange.setStatusCode(StatusCodes.INTERNAL_SERVER_ERROR);
-            exchange.getResponseSender().send("Exception: " + e.getMessage(), IoCallback.END_EXCHANGE);
+            sendException(exchange, e);
 
         }
     }
