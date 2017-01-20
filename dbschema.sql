@@ -8,6 +8,7 @@ CREATE TABLE hypermodels (
     hypermodel_uid UUID PRIMARY KEY,
     user_id text NOT NULL, -- Creator
     created TIMESTAMP WITH TIME ZONE DEFAULT now() --timezone('UTC'::text, now()) NOT NULL
+    , updated TIMESTAMP WITH TIME ZONE DEFAULT now()
 );
 
 CREATE TABLE hypermodel_versions (

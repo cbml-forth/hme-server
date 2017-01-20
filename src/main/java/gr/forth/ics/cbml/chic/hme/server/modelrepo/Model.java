@@ -34,9 +34,6 @@ public class Model {
     private List<Output> outputs;
     private boolean frozen = false;
 
-    public Model()
-    { this("", "", "", "");}
-
     public Model(final String id, final String name, final String description, final String uuid)
     {
         this.id = id;
@@ -60,18 +57,6 @@ public class Model {
     public String getDescription() {
         return description;
     }
-
-    /*
-    public void setDescription(String description) {
-        this.description = description;
-    }
-    public void setName(String name) {
-        this.name = name;
-    }
-    public void setId(String id) {
-        this.id = id;
-    }
-    */
 
     public List<Input> getInputs() {
         return inputs;
@@ -105,6 +90,7 @@ public class Model {
             param.put("data_type", input.getDataType());
             param.put("unit", input.getUnit());
             param.put("description", input.getDescription());
+            param.put("defaultValue", input.getDefaultValue().orElse(null));
             inPorts.add(param);
         });
         jsonObject.put("inPorts", inPorts);

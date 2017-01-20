@@ -17,12 +17,14 @@ package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
 
 import java.util.List;
+import java.util.Optional;
+
 public class Input {
 
     private String name;
     private String description;
     private boolean mandatory;
-    private String defaultValue;
+    private Optional<String> defaultValue;
     private boolean dynamic;
     private String dataType;
     private String unit;
@@ -55,12 +57,12 @@ public class Input {
         this.mandatory = mandatory;
     }
 
-    public String getDefaultValue() {
+    public Optional<String> getDefaultValue() {
         return defaultValue;
     }
 
     public void setDefaultValue(String defaultValue) {
-        this.defaultValue = defaultValue;
+        this.defaultValue = Optional.ofNullable(defaultValue).filter(s -> !"".equals(s));
     }
 
     public boolean isDynamic() {

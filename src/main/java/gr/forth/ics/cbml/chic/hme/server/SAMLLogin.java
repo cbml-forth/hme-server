@@ -16,12 +16,15 @@
 package gr.forth.ics.cbml.chic.hme.server;
 
 import com.ning.http.client.*;
+import gr.forth.ics.cbml.chic.hme.server.utils.FileUtils;
 import nu.xom.Builder;
 import nu.xom.Element;
 import nu.xom.ParsingException;
 import nu.xom.XPathContext;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.StringReader;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
@@ -34,6 +37,8 @@ public class SAMLLogin implements AutoCloseable {
     final String secureTokenService;
 
     public final AsyncHttpClient httpClient;
+
+    public final String samlReqTemplate;
 
     public static final XPathContext xPathContext = new XPathContext();
 
@@ -57,17 +62,23 @@ public class SAMLLogin implements AutoCloseable {
     public SAMLLogin(final AsyncHttpClient httpClient, final String secureTokenService) {
         this.httpClient = httpClient;
         this.secureTokenService = secureTokenService;
+
+        String lines = "";
+        try (InputStream ins = FileUtils.getInputStreamFromName("resource:saml_req.xml")) {
+            lines = FileUtils.readAllChars(ins);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        this.samlReqTemplate = lines;
     }
 
     private String create_token_request(final String username, final String password, final String audience)
             throws ParsingException, IOException {
         Builder b = new Builder();
-        Element element = b.build(ClassLoader.getSystemResourceAsStream("saml_req.xml")).getRootElement();
-//        Element element = b.build("saml_req.xml").getRootElement();
 
+        Element element = b.build(new StringReader(this.samlReqTemplate)).getRootElement();
         final Element toElement = (Element) element.query("//soap:Header/wsa:To", xPathContext).get(0);
         toElement.removeChildren();
-        UUID.randomUUID().toString();
         toElement.insertChild(secureTokenService, 0);
 
         final Element msgElement = (Element) element.query("//soap:Header/wsa:MessageID", xPathContext).get(0);

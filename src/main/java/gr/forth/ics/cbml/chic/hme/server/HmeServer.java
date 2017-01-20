@@ -55,16 +55,16 @@ import static io.undertow.Handlers.routing;
 public class HmeServer {
 
 
-    final static ExecutorService executorService = Executors.newFixedThreadPool(10);
+    private final static ExecutorService executorService = Executors.newFixedThreadPool(10);
 
     private static void quickly_dispatch(final HttpServerExchange exchange, Runnable func) {
         exchange.dispatch(exchange.isInIoThread() ? SameThreadExecutor.INSTANCE : exchange.getIoThread(),
                           func);
     }
 
-    static Path previewsDir;
+    private static Path previewsDir;
 
-    static Db initDatabase() {
+    private static Db initDatabase() {
 
 
         // Use UTC as default timezone when retrieving timestamps from the DB
@@ -280,9 +280,9 @@ public class HmeServer {
         final RoutingHandler routes = routing(true)
                 .get("/preview/{uuid}/{version}",
                      exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
-                .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, samlLogin, modelRepository, semanticStore)))
+                .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, samlLogin, database, modelRepository, semanticStore)))
                 .get("/hypermodels", exchange -> exchange.dispatch(() -> get_hypermodels(exchange, database)))
-                .post("/hypermodels", exchange -> exchange.dispatch(() -> store_hypermodel(exchange, database)))
+                .post("/hypermodels", exchange -> exchange.dispatch(() -> save_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}/{version}",
                      exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}", exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
@@ -297,10 +297,10 @@ public class HmeServer {
 
         final HttpHandler corsHandler = new CORSHandler().wrap(rootHandler);
         Undertow server = Undertow.builder()
-                .addHttpListener(port, "localhost")
+                .addHttpListener(port, config.hostname())
                 .setWorkerThreads(20)
                 .setHandler(corsHandler).build();
-        System.err.println("All ready.. Start listening on " + port);
+        System.err.println("All ready.. Start listening on " + config.hostname() + ":" + port);
         server.start();
     }
 
@@ -338,20 +338,28 @@ public class HmeServer {
                 "}\n" +
                 "GROUP BY ?uuid";
 
-        System.err.println(""+q);
+        // System.err.println(""+q);
         return semanticStore.send_query_and_parse(q);
     }
-    private static void getAllModels(HttpServerExchange exchange, SAMLLogin login, ModelRepository modelRepository, SemanticStore semanticStore) {
+    private static void getAllModels(HttpServerExchange exchange, SAMLLogin login, Db db, ModelRepository modelRepository, SemanticStore semanticStore) {
+        System.err.println("-> getAllModels");
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
+        final CompletableFuture<Map<String, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
         login.login_and_create_token(config.serviceAccountName(), config.serviceAccountPassword(), modelRepository.AUDIENCE)
-                .thenCompose(token->modelRepository.getAllModels(token))
-                .thenCombine(annotationsOfModels, (models, annotations) -> {
+                .thenCompose(modelRepository::getAllModels)
+                .thenCombine(mapCompletableFuture, (models, counts) -> models.stream().map(model -> {
+                    final JSONObject json = model.toJSON();
+                    json.put("usage", counts.getOrDefault(model.getUuid(), 0));
+                    return json;
+                }).collect(Collectors.toList()))
+                .thenCombine(annotationsOfModels, (jsonList, annotations) -> {
+                    System.err.println("Got models and annotations");
                     final Map<String, List<Map<String, String>>> annsPerModel = annotations.stream().collect(Collectors.groupingBy(m -> m.get("uuid")));
                     JSONArray a = new JSONArray();
-                    models.forEach(model -> {
-                        final JSONObject json = model.toJSON();
-                        if (annsPerModel.containsKey(model.getUuid())) {
-                            final Map<String, String> m = annsPerModel.get(model.getUuid()).get(0);
+                    jsonList.forEach(json -> {
+                        final String uuid = json.getAsString("uuid");
+                        if (annsPerModel.containsKey(uuid)) {
+                            final Map<String, String> m = annsPerModel.get(uuid).get(0);
                             m.remove("uuid");
                             final JSONObject persp = new JSONObject();
                             m.forEach((k, v) -> {
@@ -452,10 +460,9 @@ public class HmeServer {
                      final Timestamp last_update = row.getTimestamp("version_created");
 //                    final Date gmtDate = Date.from(last_update.toInstant(ZoneOffset.UTC));
                      String etag = String.format("%d", version);
-                     boolean weakEtag = true;
-                     final ETag eTag = new ETag(weakEtag, etag);
+                     final ETag eTag = new ETag(false, etag);
 
-                     if (ETagUtils.handleIfNoneMatch(exchange, eTag, weakEtag)) {
+                     if (ETagUtils.handleIfNoneMatch(exchange, eTag, eTag.isWeak())) {
                          try {
                              JSONObject js = rowToHypermodel(row);
                              exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
@@ -518,10 +525,9 @@ public class HmeServer {
 
         Path outputImgFile = previewPathFor(param, version);
         String etag = getPathETag(outputImgFile);
-        boolean weakEtag = false;
-        final ETag eTag = new ETag(weakEtag, etag);
+        final ETag eTag = new ETag(false, etag);
 
-        if (ETagUtils.handleIfNoneMatch(exchange, eTag, weakEtag) == false) {
+        if (!ETagUtils.handleIfNoneMatch(exchange, eTag, eTag.isWeak())) {
             exchange.setStatusCode(StatusCodes.NOT_MODIFIED);
             exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age=43200");
             exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
@@ -580,6 +586,7 @@ public class HmeServer {
     }
 
     static void sendException(final HttpServerExchange exchange, final Throwable throwable, int code) {
+        throwable.printStackTrace();
         sendError(exchange, throwable.getMessage(), code);
     }
     static void sendError(final HttpServerExchange exchange, final String msg, int code) {
@@ -591,7 +598,39 @@ public class HmeServer {
         exchange.getResponseSender().send(error.toJSONString(), IoCallback.END_EXCHANGE);
     }
 
-    private static void store_hypermodel(final HttpServerExchange exchange, Db db) {
+    private static CompletableFuture<Map<String, Integer>> countHypermodelsPerModel(final Db db)
+    {
+
+        CompletableFuture<Map<String, Integer>> fut = new CompletableFuture<>();
+        db.query("select model_uuid, count(*)::int4" +
+                " FROM hypermodel_versions_models JOIN recent_versions_vw USING (hypermodel_uid)" +
+                " WHERE hypermodel_version = most_recent_version GROUP BY model_uuid"
+                , rs -> {
+                    final HashMap<String, Integer> map = new HashMap<>();
+                    for (Row r : rs) {
+                        final String model_uuid = r.getString(0);
+                        final Integer cnt = r.getInt(1);
+                        map.put(model_uuid, cnt);
+
+                    }
+                    fut.complete(map);
+                }
+                , fut::completeExceptionally);
+        return fut;
+    }
+
+    private static ETag hypermodelEtag(final Long version)
+    {
+        return hypermodelEtag(version == null ? -1 : version);
+    }
+    private static ETag hypermodelEtag(final long version)
+    {
+        final boolean weakEtag = false;
+        final String etag  = version < 0 ? "-" : String.format("%d", version);
+        return new ETag(weakEtag, etag);
+    }
+
+    private static void save_hypermodel(final HttpServerExchange exchange, Db db) {
         final String user_id = userId(exchange);
         exchange.startBlocking();
         try {
@@ -608,54 +647,77 @@ public class HmeServer {
 
             final boolean frozen = (Boolean) o.getOrDefault("frozen", Boolean.FALSE);
 
-            db.query("INSERT INTO hypermodels(hypermodel_uid,user_id)" +
-                             " VALUES($1,$2) ON CONFLICT DO NOTHING" +
-                             " RETURNING *",
+            db.query("WITH upd AS " +
+                            "(INSERT INTO hypermodels(hypermodel_uid,user_id)" +
+                             " VALUES($1,$2) ON CONFLICT (hypermodel_uid) DO UPDATE SET updated=now()" +
+                             " RETURNING *)" +
+                            " SELECT MAX(hypermodel_version) most_recent_version" +
+                            " FROM hypermodel_versions JOIN upd USING (hypermodel_uid)",
                      Arrays.asList(uuid, user_id),
-                     rs -> db.query(
-                             "INSERT INTO hypermodel_versions(hypermodel_uid, title, description, svg_content, json_content, graph_content, frozen)" +
-                                     " VALUES($1, $2, $3, $4, $5, $6, $7)" +
-                                     " RETURNING hypermodel_version",
-                             Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen),
-                             rs1 -> {
-                                 final Long version = rs1.row(0).getLong(0);
-                                 exchange.setStatusCode(StatusCodes.CREATED);
-                                 exchange.getResponseHeaders()
-                                         .add(Headers.LOCATION, String.format("/hypermodels/%s/%d", uuid, version));
-                                 exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                                 final JSONObject obj = new JSONObject(Collections.singletonMap("version",
-                                                                                                version.toString()));
-                                 exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
+                     rs -> {
+
+                         final Long most_recent_version = rs.row(0).getLong(0);
+
+                         final ETag eTag = hypermodelEtag(most_recent_version);
+
+                         if (rs.size() == 0 || ETagUtils.handleIfMatch(exchange, eTag, eTag.isWeak())) {
+                             db.query(
+                                     "INSERT INTO hypermodel_versions(hypermodel_uid, title, description, svg_content, json_content, graph_content, frozen)" +
+                                             " VALUES($1, $2, $3, $4, $5, $6, $7)" +
+                                             " RETURNING hypermodel_version",
+                                     Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen),
+                                     rs1 -> {
+                                         final Long version = rs1.row(0).getLong(0);
+                                         final ETag eTag2 = hypermodelEtag(version);
+
+                                         exchange.setStatusCode(StatusCodes.CREATED);
+                                         exchange.getResponseHeaders()
+                                                 .add(Headers.LOCATION, String.format("/hypermodels/%s/%d", uuid, version))
+                                                 .add(Headers.ETAG, eTag2.toString());
+                                         exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                                         final JSONObject obj = new JSONObject(Collections.singletonMap("version",
+                                                 ""+version));
+                                         exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
 
 
-                                 int x = 0, y = 0;
-                                 int width = 2000, height = 2000;
+                                         int x = 0, y = 0;
+                                         int width = 2000, height = 2000;
 
-                                 int quality = 99; // 0 - 100
+                                         int quality = 99; // 0 - 100
 
-                                 final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
+                                         final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
 
-                                 final Path outputImgFile = previewPathFor(uuid, version);
+                                         final Path outputImgFile = previewPathFor(uuid, version);
 
-                                 try {
-                                     Path inputSvgFile = Files.createTempFile("", ".svg");
-                                     Files.write(inputSvgFile,
-                                                 svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
-                                     executorService.submit(() -> svgToImage(inputSvgFile,
-                                                                             outputImgFile,
-                                                                             x,
-                                                                             y,
-                                                                             width,
-                                                                             height,
-                                                                             quality));
-                                 } catch (IOException e) {
-                                     e.printStackTrace();
-                                 }
+                                         try {
+                                             Path inputSvgFile = Files.createTempFile("", ".svg");
+                                             Files.write(inputSvgFile,
+                                                     svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
+                                             executorService.submit(() -> svgToImage(inputSvgFile,
+                                                     outputImgFile,
+                                                     x,
+                                                     y,
+                                                     width,
+                                                     height,
+                                                     quality));
+                                         } catch (IOException e) {
+                                             e.printStackTrace();
+                                         }
 
 
-                             },
-                             ex -> sendException(exchange, ex)
-                     ),
+                                     },
+                                     ex -> sendException(exchange, ex)
+                             );
+                         }
+                         else {
+                             exchange.setStatusCode(StatusCodes.PRECONDITION_FAILED);
+                             exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                             final JSONObject obj = new JSONObject(Collections.singletonMap("version",
+                                     ""+most_recent_version));
+                             exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
+
+                         }
+                     },
                      throwable -> sendException(exchange, throwable));
 
         } catch (Exception e) {
@@ -686,8 +748,8 @@ public class HmeServer {
         final Long[] versions = row.getArray("versions", Long[].class);
 
         js.put("uuid", hypermodel_uid);
-        js.put("version", version);
-        js.put("most_recent_version", most_recent_version);
+        js.put("version", version.toString());
+        js.put("most_recent_version", most_recent_version.toString());
         js.put("frozen", frozen);
         js.put("title", title);
         js.put("description", description);
