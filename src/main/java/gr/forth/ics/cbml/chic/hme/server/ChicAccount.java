@@ -10,6 +10,7 @@ import org.pac4j.undertow.context.UndertowWebContext;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Created by ssfak on 24/1/17.
@@ -95,6 +96,12 @@ public final class ChicAccount {
         if (attributes.containsKey("givenName") && attributes.containsKey("sn"))
             return attributes.get("givenName") + " " + attributes.get("sn");
         return "";
+    }
+
+    String attrsToString() {
+        return this.attributes.entrySet().stream()
+                .map(entry-> entry.getKey() + " = " + entry.getValue())
+                .collect(Collectors.joining("\n"));
     }
 
     String getEmail() {

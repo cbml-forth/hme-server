@@ -428,10 +428,13 @@ public class HmeServer {
 
     private static void getAllModels(HttpServerExchange exchange, SAMLLogin login, Db db, ModelRepository modelRepository, SemanticStore semanticStore) {
         System.err.println("-> getAllModels");
+
         ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
+        ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.out::println);
+        Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user-> "crafsrv");
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
         final CompletableFuture<Map<String, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
-        login.login_and_create_token(config.serviceAccountName(), config.serviceAccountPassword(), modelRepository.AUDIENCE)
+        login.createToken(config.serviceAccountName(), config.serviceAccountPassword(), modelRepository.AUDIENCE, actAs)
                 .thenCompose(modelRepository::getAllModels)
                 .thenCombine(mapCompletableFuture, (models, counts) -> models.stream().map(model -> {
                     final JSONObject json = model.toJSON();
