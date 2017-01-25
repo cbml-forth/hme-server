@@ -20,21 +20,33 @@ import com.github.pgasync.Db;
 import com.github.pgasync.Row;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.ModelRepository;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.SemanticStore;
+import io.undertow.Handlers;
 import io.undertow.Undertow;
 import io.undertow.io.IoCallback;
+import io.undertow.security.api.SecurityContext;
+import io.undertow.security.idm.Account;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.server.RoutingHandler;
 import io.undertow.server.handlers.PredicateHandler;
-import io.undertow.server.handlers.resource.FileResourceManager;
-import io.undertow.server.handlers.resource.Resource;
-import io.undertow.server.handlers.resource.ResourceManager;
+import io.undertow.server.handlers.resource.*;
+import io.undertow.server.session.InMemorySessionManager;
+import io.undertow.server.session.SessionAttachmentHandler;
+import io.undertow.server.session.SessionCookieConfig;
 import io.undertow.util.*;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 import net.minidev.json.parser.JSONParser;
 import net.minidev.json.parser.ParseException;
 import org.aeonbits.owner.ConfigFactory;
+import org.pac4j.core.config.Config;
+import org.pac4j.saml.client.SAML2Client;
+import org.pac4j.saml.metadata.SAML2MetadataResolver;
+import org.pac4j.undertow.account.Pac4jAccount;
+import org.pac4j.undertow.context.UndertowWebContext;
+import org.pac4j.undertow.handler.ApplicationLogoutHandler;
+import org.pac4j.undertow.handler.CallbackHandler;
+import org.pac4j.undertow.handler.SecurityHandler;
 
 import java.io.File;
 import java.io.IOException;
@@ -59,7 +71,7 @@ public class HmeServer {
 
     private static void quickly_dispatch(final HttpServerExchange exchange, Runnable func) {
         exchange.dispatch(exchange.isInIoThread() ? SameThreadExecutor.INSTANCE : exchange.getIoThread(),
-                          func);
+                func);
     }
 
     private static Path previewsDir;
@@ -108,12 +120,12 @@ public class HmeServer {
 
         final String viewbox = String.format("%d:%d:%d:%d", x, y, width, height);
         ProcessBuilder processBuilder = new ProcessBuilder("svgexport",
-                                                           inputSvgFile.toString(),
-                                                           outputSvgPath.toString(),
-                                                           quality,
-                                                           viewbox,
-                                                           // "5000:5000", "crop",
-                                                           styles);
+                inputSvgFile.toString(),
+                outputSvgPath.toString(),
+                quality,
+                viewbox,
+                // "5000:5000", "crop",
+                styles);
         processBuilder.inheritIO();
 
         // System.err.println(processBuilder.command().stream().collect(Collectors.joining(" ")));
@@ -126,8 +138,8 @@ public class HmeServer {
                 int maxSizeKB = 20;
 
                 ProcessBuilder processBuilder2 = new ProcessBuilder("jpegoptim",
-                                                                    "--size=" + maxSizeKB,
-                                                                    outputSvgPath.toString());
+                        "--size=" + maxSizeKB,
+                        outputSvgPath.toString());
                 processBuilder2.inheritIO();
                 Process p2 = processBuilder2.start();
                 exitCode = p2.waitFor();
@@ -173,7 +185,7 @@ public class HmeServer {
 
             if (exitCode == 0) {
                 FileResourceManager fileResourceManager = new FileResourceManager(outputSvgPath.getParent().toFile(),
-                                                                                  1024 * 1024);
+                        1024 * 1024);
                 Resource resource = fileResourceManager.getResource(outputSvgPath.getFileName().toString());
                 resource.serve(exchange.getResponseSender(), exchange, IoCallback.END_EXCHANGE);
             } else {
@@ -213,7 +225,7 @@ public class HmeServer {
 
             if (exitCode == 0) {
                 FileResourceManager fileResourceManager = new FileResourceManager(outputSvgPath.getParent().toFile(),
-                                                                                  1024 * 1024);
+                        1024 * 1024);
                 Resource resource = fileResourceManager.getResource(outputSvgPath.getFileName().toString());
                 exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "image/jpeg");
                 exchange.getResponseHeaders().add(Headers.ETAG, etag.toString());
@@ -250,7 +262,7 @@ public class HmeServer {
     }
 
     public static Db init() throws IOException {
-         previewsDir = Paths.get("/tmp", "hme-previews");
+        previewsDir = Paths.get("/tmp", "hme-previews");
         if (!previewsDir.toFile().exists())
             Files.createDirectories(previewsDir);
 
@@ -259,7 +271,41 @@ public class HmeServer {
 
     }
 
+
+    private static Pac4jAccount getAccount(final HttpServerExchange exchange) {
+        final SecurityContext securityContext = exchange.getSecurityContext();
+        if (securityContext != null) {
+            final Account account = securityContext.getAuthenticatedAccount();
+            if (account instanceof Pac4jAccount) {
+                return (Pac4jAccount) account;
+            }
+        }
+        return null;
+    }
+
     private static HmeServerConfig config;
+
+    private static void apiError401(final HttpServerExchange exchange) {
+        final String msg = "Authentication error: You need to login, please visit " +
+                "/hme2/login?url=" + exchange.getRequestPath();
+        sendError(exchange, msg, StatusCodes.UNAUTHORIZED);
+
+    }
+
+    private static HttpHandler createLoginHandler(final String contParam, final String homeUrl) {
+        return exchange -> {
+            final Map<String, Deque<String>> queryParameters = exchange.getQueryParameters();
+            final String nextUrl = queryParameters.containsKey(contParam) ?
+                    queryParameters.get(contParam).getFirst()
+                    : homeUrl;
+            exchange.setStatusCode(StatusCodes.FOUND);
+            exchange.getResponseHeaders().put(Headers.LOCATION, nextUrl);
+            exchange.endExchange();
+        };
+
+
+    }
+
     public static void main(String[] args) throws IOException {
 
         final HmeServerConfig serverConfig = ConfigFactory.create(HmeServerConfig.class);
@@ -274,34 +320,72 @@ public class HmeServer {
         final ModelRepository modelRepository = new ModelRepository(10, true);
         final SAMLLogin samlLogin = new SAMLLogin(config.secureTokenService());
         final String endpoint = config.sparqlRicordo();
-        System.err.println("RICORDO : "+endpoint);
+        System.err.println("RICORDO : " + endpoint);
         final SemanticStore semanticStore = new SemanticStore(endpoint);
 
-        final RoutingHandler routes = routing(true)
+        final Config samlConfig = new SamlConfigFactory("https://ssfak.duckdns.org/hme2/").build();
+
+        final RoutingHandler apiRoutes = routing(true)
                 .get("/preview/{uuid}/{version}",
-                     exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
+                        exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
                 .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, samlLogin, database, modelRepository, semanticStore)))
+
                 .get("/hypermodels", exchange -> exchange.dispatch(() -> get_hypermodels(exchange, database)))
                 .post("/hypermodels", exchange -> exchange.dispatch(() -> save_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}/{version}",
-                     exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
+                        exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}", exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
-                .post("/transcode", HmeServer::transcode);
+                .get("/transcode", HmeServer::transcode);
 
-        ResourceManager assets_res_mgr = new FileResourceManager(new File(
-                "/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme-ng/src"), 1024 * 1024);
-        HttpHandler rootHandler = new PredicateHandler(
-                httpServerExchange -> httpServerExchange.getRequestPath().startsWith("/static"),
-                exchange -> quickly_dispatch(exchange, () -> serveStaticFile(assets_res_mgr, exchange)),
-                routes);
+        final HttpHandler corsHandler = new CORSHandler().wrap(apiRoutes);
 
-        final HttpHandler corsHandler = new CORSHandler().wrap(rootHandler);
+        HttpHandler rootHandler = Handlers.path()
+                // Redirect root path to /static to serve the index.html by default
+                .addExactPath("/", Handlers.redirect("/hme2/static"))
+
+                // Serve all static files from a folder
+                .addPrefixPath("/static", new ResourceHandler(
+                        new PathResourceManager(Paths.get("/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme-ng/src"), 1024))
+                        .setWelcomeFiles("index.html"))
+
+                // REST API path
+                .addPrefixPath("/api", new PredicateHandler(ChicAccount.authnPredicate(), corsHandler, HmeServer::apiError401))
+
+                .addExactPath("/login", SecurityHandler.build(createLoginHandler("url", "/hme2/api/models"), samlConfig, "SAML2Client"))
+
+                // Security related endpoints:
+                .addExactPath("/metadata", exchange -> HmeServer.samlMetadata(exchange, samlConfig))
+                .addExactPath("/callback", CallbackHandler.build(samlConfig, null, true))
+                .addExactPath("/logout", new ApplicationLogoutHandler(samlConfig, "/hme2/?defaulturlafterlogout"));
+
+
+        final SessionAttachmentHandler sessionManager =
+                new SessionAttachmentHandler(Handlers.path().addPrefixPath("/hme2", rootHandler),
+                        new InMemorySessionManager("SessionManager"),
+                        new SessionCookieConfig());
         Undertow server = Undertow.builder()
-                .addHttpListener(port, config.hostname())
+                .addHttpListener(port, HmeServer.config.hostname())
                 .setWorkerThreads(20)
-                .setHandler(corsHandler).build();
-        System.err.println("All ready.. Start listening on " + config.hostname() + ":" + port);
+                .setHandler(sessionManager).build();
+//                .setHandler(corsHandler).build();
+        System.err.println("All ready.. Start listening on " + HmeServer.config.hostname() + ":" + port);
         server.start();
+    }
+
+    private static void samlMetadata(final HttpServerExchange exchange, Config samlConfig) {
+
+        final SAML2Client client = (SAML2Client) samlConfig.getClients().findAllClients().get(0);
+
+        if (client.getServiceProviderMetadataResolver() == null) {
+            UndertowWebContext context = new UndertowWebContext(exchange);
+
+            client.init(context);
+        }
+        final SAML2MetadataResolver serviceProviderMetadataResolver = client.getServiceProviderMetadataResolver();
+        final String metadata = serviceProviderMetadataResolver.getMetadata();
+
+        exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/xml");
+        exchange.getResponseSender().send(metadata, IoCallback.END_EXCHANGE);
     }
 
     private static CompletableFuture<List<Map<String, String>>> getAnnotationsOfModels(SemanticStore semanticStore) {
@@ -341,8 +425,10 @@ public class HmeServer {
         // System.err.println(""+q);
         return semanticStore.send_query_and_parse(q);
     }
+
     private static void getAllModels(HttpServerExchange exchange, SAMLLogin login, Db db, ModelRepository modelRepository, SemanticStore semanticStore) {
         System.err.println("-> getAllModels");
+        ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
         final CompletableFuture<Map<String, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
         login.login_and_create_token(config.serviceAccountName(), config.serviceAccountPassword(), modelRepository.AUDIENCE)
@@ -366,22 +452,21 @@ public class HmeServer {
                                 if (!"".equals(v)) {
                                     final String[] strings = v.split(" ");
                                     final JSONArray jsonArray = new JSONArray();
-                                    jsonArray.addAll(Arrays.asList( strings ));
+                                    jsonArray.addAll(Arrays.asList(strings));
                                     persp.put(k, jsonArray);
                                 }
                             });
                             json.put("perspectives", persp);
-                        }
-                        else
+                        } else
                             json.put("perspectives", new JSONObject());
                         a.add(json);
                     });
 
                     return a;
                 })
-                .handle((jsonArray, throwable)-> {
+                .handle((jsonArray, throwable) -> {
 
-                    if (throwable != null )
+                    if (throwable != null)
                         sendException(exchange, throwable);
                     else {
                         exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
@@ -392,6 +477,7 @@ public class HmeServer {
                 });
 
     }
+
 
     private static String userId(final HttpServerExchange exchange) {
         return "stelios"; // XXX
@@ -404,23 +490,23 @@ public class HmeServer {
                 "SELECT * FROM hypermodel_versions_vw WHERE user_id=$1 AND hypermodel_version=most_recent_version";
 
         db.query(sql, Arrays.asList(user_id),
-                 rs -> {
-                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
-                     JSONArray l = new JSONArray();
-                     rs.forEach(row -> {
-                         try {
-                             JSONObject js = rowToHypermodel(row, p);
-                             l.add(js);
-                         } catch (Exception e) {
-                             e.printStackTrace();
-                         }
+                rs -> {
+                    JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
+                    JSONArray l = new JSONArray();
+                    rs.forEach(row -> {
+                        try {
+                            JSONObject js = rowToHypermodel(row, p);
+                            l.add(js);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
 
-                     });
-                     exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                     exchange.getResponseSender().send(l.toJSONString(), IoCallback.END_EXCHANGE);
+                    });
+                    exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getResponseSender().send(l.toJSONString(), IoCallback.END_EXCHANGE);
 
-                 },
-                 throwable -> sendException(exchange, throwable));
+                },
+                throwable -> sendException(exchange, throwable));
     }
 
     private static void get_hypermodel(final HttpServerExchange exchange, Db db) {
@@ -435,8 +521,8 @@ public class HmeServer {
             uuid = UUID.fromString(param);
         } catch (IllegalArgumentException ex) {
             sendError(exchange,
-                      "Hypermodel '" + param + "' was not found!",
-                      StatusCodes.NOT_FOUND);
+                    "Hypermodel '" + param + "' was not found!",
+                    StatusCodes.NOT_FOUND);
             return;
         }
 
@@ -446,46 +532,46 @@ public class HmeServer {
 
         final List params = aVersion == null ? Arrays.asList(user_id, uuid) : Arrays.asList(user_id, uuid, aVersion);
         db.query(sql, params,
-                 rs -> {
-                     if (rs.size() == 0) {
-                         sendError(exchange,
-                                   "Hypermodel '" + uuid + "' (version=" + aVersion + ") was not found!",
-                                   StatusCodes.NOT_FOUND);
-                         return;
+                rs -> {
+                    if (rs.size() == 0) {
+                        sendError(exchange,
+                                "Hypermodel '" + uuid + "' (version=" + aVersion + ") was not found!",
+                                StatusCodes.NOT_FOUND);
+                        return;
 
-                     }
-                     final Row row = rs.row(0);
+                    }
+                    final Row row = rs.row(0);
 
-                     final Long version = row.getLong("hypermodel_version");
-                     final Timestamp last_update = row.getTimestamp("version_created");
+                    final Long version = row.getLong("hypermodel_version");
+                    final Timestamp last_update = row.getTimestamp("version_created");
 //                    final Date gmtDate = Date.from(last_update.toInstant(ZoneOffset.UTC));
-                     String etag = String.format("%d", version);
-                     final ETag eTag = new ETag(false, etag);
+                    String etag = String.format("%d", version);
+                    final ETag eTag = new ETag(false, etag);
 
-                     if (ETagUtils.handleIfNoneMatch(exchange, eTag, eTag.isWeak())) {
-                         try {
-                             JSONObject js = rowToHypermodel(row);
-                             exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                             exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
-                             exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age:36500");
-                             exchange.getResponseHeaders()
-                                     .add(Headers.LAST_MODIFIED, DateUtils.toDateString(last_update));
-                             exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
-                         } catch (ParseException e) {
-                             e.printStackTrace();
-                             sendException(exchange, e);
-                             return;
-                         }
-                     } else {
-                         exchange.setStatusCode(StatusCodes.NOT_MODIFIED);
-                         exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
+                    if (ETagUtils.handleIfNoneMatch(exchange, eTag, eTag.isWeak())) {
+                        try {
+                            JSONObject js = rowToHypermodel(row);
+                            exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                            exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
+                            exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age:36500");
+                            exchange.getResponseHeaders()
+                                    .add(Headers.LAST_MODIFIED, DateUtils.toDateString(last_update));
+                            exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
+                        } catch (ParseException e) {
+                            e.printStackTrace();
+                            sendException(exchange, e);
+                            return;
+                        }
+                    } else {
+                        exchange.setStatusCode(StatusCodes.NOT_MODIFIED);
+                        exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
 
-                         exchange.endExchange();
-                     }
+                        exchange.endExchange();
+                    }
 
 
-                 },
-                 throwable -> sendException(exchange, throwable));
+                },
+                throwable -> sendException(exchange, throwable));
     }
 
 
@@ -538,7 +624,7 @@ public class HmeServer {
 
         if (outputImgFile.toFile().exists()) {
             FileResourceManager fileResourceManager = new FileResourceManager(previewsDir.toFile(),
-                                                                              1024 * 1024);
+                    1024 * 1024);
             Resource resource = fileResourceManager.getResource(outputImgFile.getFileName().toString());
             exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age=43200");
             exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
@@ -553,32 +639,32 @@ public class HmeServer {
                 " WHERE user_id=$1 AND hypermodel_uid=$2 AND hypermodel_version=$3";
 
         db.query(sql, Arrays.asList(user_id, uuid, version),
-                 rs -> {
-                     if (rs.size() == 0) {
-                         sendError(exchange,
-                                   "Hypermodel '" + uuid + "' (version=" + version + ") was not found!",
-                                   StatusCodes.NOT_FOUND);
-                         return;
+                rs -> {
+                    if (rs.size() == 0) {
+                        sendError(exchange,
+                                "Hypermodel '" + uuid + "' (version=" + version + ") was not found!",
+                                StatusCodes.NOT_FOUND);
+                        return;
 
-                     }
-
-
-                     final Row row = rs.row(0);
-                     final String svgContent = row.getString("svg_content");
-                     final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
+                    }
 
 
-                     try {
-                         Path inputSvgFile = Files.createTempFile("", ".svg");
-                         Files.write(inputSvgFile, svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
-                         executorService.submit(() -> previewSvg(exchange, inputSvgFile, outputImgFile, eTag));
-                     } catch (IOException e) {
-                         e.printStackTrace();
-                     }
+                    final Row row = rs.row(0);
+                    final String svgContent = row.getString("svg_content");
+                    final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
 
 
-                 },
-                 throwable -> sendException(exchange, throwable));
+                    try {
+                        Path inputSvgFile = Files.createTempFile("", ".svg");
+                        Files.write(inputSvgFile, svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
+                        executorService.submit(() -> previewSvg(exchange, inputSvgFile, outputImgFile, eTag));
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+
+
+                },
+                throwable -> sendException(exchange, throwable));
     }
 
     static void sendException(final HttpServerExchange exchange, final Throwable throwable) {
@@ -589,22 +675,36 @@ public class HmeServer {
         throwable.printStackTrace();
         sendError(exchange, throwable.getMessage(), code);
     }
+
     static void sendError(final HttpServerExchange exchange, final String msg, int code) {
-        exchange.setStatusCode(code);
-        exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+        /*
+        // Send an Error response according to https://tools.ietf.org/html/rfc7807
+        final JSONObject jsonObject = new JSONObject();
+        jsonObject.put("status", code);
+        jsonObject.put("title", msg);
+        final String contentType = "application/problem+json";
+        */
+
+        // Send an error according to the JSON Google guide
+        // (https://google.github.io/styleguide/jsoncstyleguide.xml)
         final JSONObject error = new JSONObject();
         error.put("code", code);
-        error.put("error", msg);
-        exchange.getResponseSender().send(error.toJSONString(), IoCallback.END_EXCHANGE);
+        error.put("message", msg);
+        final String contentType = "application/json";
+        final JSONObject jsonObject = new JSONObject();
+        jsonObject.put("error", error);
+
+        exchange.setStatusCode(code);
+        exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, contentType);
+        exchange.getResponseSender().send(jsonObject.toJSONString(), IoCallback.END_EXCHANGE);
     }
 
-    private static CompletableFuture<Map<String, Integer>> countHypermodelsPerModel(final Db db)
-    {
+    private static CompletableFuture<Map<String, Integer>> countHypermodelsPerModel(final Db db) {
 
         CompletableFuture<Map<String, Integer>> fut = new CompletableFuture<>();
         db.query("select model_uuid, count(*)::int4" +
-                " FROM hypermodel_versions_models JOIN recent_versions_vw USING (hypermodel_uid)" +
-                " WHERE hypermodel_version = most_recent_version GROUP BY model_uuid"
+                        " FROM hypermodel_versions_models JOIN recent_versions_vw USING (hypermodel_uid)" +
+                        " WHERE hypermodel_version = most_recent_version GROUP BY model_uuid"
                 , rs -> {
                     final HashMap<String, Integer> map = new HashMap<>();
                     for (Row r : rs) {
@@ -619,18 +719,18 @@ public class HmeServer {
         return fut;
     }
 
-    private static ETag hypermodelEtag(final Long version)
-    {
+    private static ETag hypermodelEtag(final Long version) {
         return hypermodelEtag(version == null ? -1 : version);
     }
-    private static ETag hypermodelEtag(final long version)
-    {
+
+    private static ETag hypermodelEtag(final long version) {
         final boolean weakEtag = false;
-        final String etag  = version < 0 ? "-" : String.format("%d", version);
+        final String etag = version < 0 ? "-" : String.format("%d", version);
         return new ETag(weakEtag, etag);
     }
 
     private static void save_hypermodel(final HttpServerExchange exchange, Db db) {
+
         final String user_id = userId(exchange);
         exchange.startBlocking();
         try {
@@ -649,76 +749,75 @@ public class HmeServer {
 
             db.query("WITH upd AS " +
                             "(INSERT INTO hypermodels(hypermodel_uid,user_id)" +
-                             " VALUES($1,$2) ON CONFLICT (hypermodel_uid) DO UPDATE SET updated=now()" +
-                             " RETURNING *)" +
+                            " VALUES($1,$2) ON CONFLICT (hypermodel_uid) DO UPDATE SET updated=now()" +
+                            " RETURNING *)" +
                             " SELECT MAX(hypermodel_version) most_recent_version" +
                             " FROM hypermodel_versions JOIN upd USING (hypermodel_uid)",
-                     Arrays.asList(uuid, user_id),
-                     rs -> {
+                    Arrays.asList(uuid, user_id),
+                    rs -> {
 
-                         final Long most_recent_version = rs.row(0).getLong(0);
+                        final Long most_recent_version = rs.row(0).getLong(0);
 
-                         final ETag eTag = hypermodelEtag(most_recent_version);
+                        final ETag eTag = hypermodelEtag(most_recent_version);
 
-                         if (rs.size() == 0 || ETagUtils.handleIfMatch(exchange, eTag, eTag.isWeak())) {
-                             db.query(
-                                     "INSERT INTO hypermodel_versions(hypermodel_uid, title, description, svg_content, json_content, graph_content, frozen)" +
-                                             " VALUES($1, $2, $3, $4, $5, $6, $7)" +
-                                             " RETURNING hypermodel_version",
-                                     Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen),
-                                     rs1 -> {
-                                         final Long version = rs1.row(0).getLong(0);
-                                         final ETag eTag2 = hypermodelEtag(version);
+                        if (rs.size() == 0 || ETagUtils.handleIfMatch(exchange, eTag, eTag.isWeak())) {
+                            db.query(
+                                    "INSERT INTO hypermodel_versions(hypermodel_uid, title, description, svg_content, json_content, graph_content, frozen)" +
+                                            " VALUES($1, $2, $3, $4, $5, $6, $7)" +
+                                            " RETURNING hypermodel_version",
+                                    Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen),
+                                    rs1 -> {
+                                        final Long version = rs1.row(0).getLong(0);
+                                        final ETag eTag2 = hypermodelEtag(version);
 
-                                         exchange.setStatusCode(StatusCodes.CREATED);
-                                         exchange.getResponseHeaders()
-                                                 .add(Headers.LOCATION, String.format("/hypermodels/%s/%d", uuid, version))
-                                                 .add(Headers.ETAG, eTag2.toString());
-                                         exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                                         final JSONObject obj = new JSONObject(Collections.singletonMap("version",
-                                                 ""+version));
-                                         exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
-
-
-                                         int x = 0, y = 0;
-                                         int width = 2000, height = 2000;
-
-                                         int quality = 99; // 0 - 100
-
-                                         final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
-
-                                         final Path outputImgFile = previewPathFor(uuid, version);
-
-                                         try {
-                                             Path inputSvgFile = Files.createTempFile("", ".svg");
-                                             Files.write(inputSvgFile,
-                                                     svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
-                                             executorService.submit(() -> svgToImage(inputSvgFile,
-                                                     outputImgFile,
-                                                     x,
-                                                     y,
-                                                     width,
-                                                     height,
-                                                     quality));
-                                         } catch (IOException e) {
-                                             e.printStackTrace();
-                                         }
+                                        exchange.setStatusCode(StatusCodes.CREATED);
+                                        exchange.getResponseHeaders()
+                                                .add(Headers.LOCATION, String.format("/hypermodels/%s/%d", uuid, version))
+                                                .add(Headers.ETAG, eTag2.toString());
+                                        exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                                        final JSONObject obj = new JSONObject(Collections.singletonMap("version",
+                                                "" + version));
+                                        exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
 
 
-                                     },
-                                     ex -> sendException(exchange, ex)
-                             );
-                         }
-                         else {
-                             exchange.setStatusCode(StatusCodes.PRECONDITION_FAILED);
-                             exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                             final JSONObject obj = new JSONObject(Collections.singletonMap("version",
-                                     ""+most_recent_version));
-                             exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
+                                        int x = 0, y = 0;
+                                        int width = 2000, height = 2000;
 
-                         }
-                     },
-                     throwable -> sendException(exchange, throwable));
+                                        int quality = 99; // 0 - 100
+
+                                        final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
+
+                                        final Path outputImgFile = previewPathFor(uuid, version);
+
+                                        try {
+                                            Path inputSvgFile = Files.createTempFile("", ".svg");
+                                            Files.write(inputSvgFile,
+                                                    svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
+                                            executorService.submit(() -> svgToImage(inputSvgFile,
+                                                    outputImgFile,
+                                                    x,
+                                                    y,
+                                                    width,
+                                                    height,
+                                                    quality));
+                                        } catch (IOException e) {
+                                            e.printStackTrace();
+                                        }
+
+
+                                    },
+                                    ex -> sendException(exchange, ex)
+                            );
+                        } else {
+                            exchange.setStatusCode(StatusCodes.PRECONDITION_FAILED);
+                            exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                            final JSONObject obj = new JSONObject(Collections.singletonMap("version",
+                                    "" + most_recent_version));
+                            exchange.getResponseSender().send(obj.toJSONString(), IoCallback.END_EXCHANGE);
+
+                        }
+                    },
+                    throwable -> sendException(exchange, throwable));
 
         } catch (Exception e) {
             e.printStackTrace();

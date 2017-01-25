@@ -33,9 +33,22 @@ public final class FileUtils {
      * @param path the path
      * @return the completed path
      */
-    private static String startWithSlash(final String path) {
+    public static String startWithSlash(final String path) {
         if (!path.startsWith("/")) {
             return "/" + path;
+        } else {
+            return path;
+        }
+    }
+    /**
+     * Add a slash at the end of a path if missing.
+     *
+     * @param path the path
+     * @return the completed path
+     */
+    public static String endWithSlash(final String path) {
+        if (!path.endsWith("/")) {
+            return path + "/";
         } else {
             return path;
         }
