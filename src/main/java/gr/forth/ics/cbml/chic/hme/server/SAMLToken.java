@@ -111,16 +111,6 @@ public class SAMLToken {
     }
 
     private void create_http_token() {
-
-/*
-        final Nodes nodes = this.xml.query("//wst:RequestedSecurityToken", xPathContext);
-        if (nodes.size() == 0) {
-            // Well, this should not happen if the login was successfull
-            this.httpSamlToken = ""; // XXX
-            return;
-        }
-        final Element token_xml = ((Element) nodes.get(0)).getFirstChildElement("Assertion", xPathContext.lookup("saml"));
-*/
         final Nodes nodes = this.xml.query("//saml:Assertion", xPathContext);
         if (nodes.size() == 0) {
             // Well, this should not happen if the login was successfull
@@ -146,28 +136,6 @@ public class SAMLToken {
 
     public Map<String, String> getAssertions() {
         return Collections.unmodifiableMap(assertions);
-    }
-
-    public String getUserId() {
-        if (assertions.containsKey("uid"))
-            return assertions.get("uid");
-        return assertions.getOrDefault("rfc2798_uid", "");
-    }
-    public String getUserName() {
-        if (assertions.containsKey("displayName"))
-            return assertions.get("displayName");
-        if (assertions.containsKey("cn"))
-            return assertions.get("cn");
-        if (assertions.containsKey("givenName") && assertions.containsKey("sn"))
-            return assertions.get("givenName") + " " + assertions.get("sn");
-        return "";
-    }
-
-    @Override
-    public String toString() {
-        return String.format("<TOKEN user='%s' id='%s'%s>",
-                this.getUserName(), this.getUserId(),
-                this.isValid() ? "" : " Expired!");
     }
 
     public boolean isValid() {
@@ -197,7 +165,7 @@ public class SAMLToken {
                     values.add(attrValues.get(k).getValue());
                 }
                 final String value = String.join(",", values); // XXX: what to do with multiple values?
-                assertions.put(samlNamesToUserFriendly.getOrDefault(name, name), value);
+                assertions.put(name, value);
             }
 
             final Nodes dateConditions = assertion.query("//saml:Conditions[@NotOnOrAfter]", xPathContext);
@@ -211,29 +179,4 @@ public class SAMLToken {
         this.assertions = assertions;
     }
 
-    public static HashMap<String, String> samlNamesToUserFriendly =
-            new HashMap<String, String>() {
-                {
-                    put("urn:oid:0.9.2342.19200300.100.1.1", "rfc2798_uid");
-                    put("urn:custodix:ciam:1.0:principal:uuid", "uid");
-                    put("urn:custodix:ciam:1.0:domain:name", "domain");
-                    put("urn:custodix:ciam:1.0:domain:uuid", "domainUuid");
-                    put("urn:oid:0.9.2342.19200300.100.1.3", "mail");
-                    put("urn:oid:2.16.840.1.113730.3.1.241", "displayName");
-                    put("urn:oid:2.5.4.3", "cn");
-                    put("urn:oid:2.5.4.4", "sn");
-                    put("urn:oid:2.5.4.12", "title");
-                    put("urn:oid:2.5.4.20", "phone");
-                    put("urn:oid:2.5.4.42", "givenName");
-                    put("urn:oid:2.5.6.8", "organizationalRole");
-                    put("urn:oid:2.16.840.1.113730.3.1.3", "employeeNumber");
-                    put("urn:oid:2.16.840.1.113730.3.1.4", "employeeType");
-                    put("urn:oid:1.3.6.1.4.1.5923.1.1.1.1", "eduPersonAffiliation");
-                    put("urn:oid:1.3.6.1.4.1.5923.1.1.1.2", "eduPersonNickname");
-                    put("urn:oid:1.3.6.1.4.1.5923.1.1.1.6", "eduPersonPrincipalName");
-                    put("urn:oid:1.3.6.1.4.1.5923.1.1.1.9", "eduPersonScopedAffiliation");
-                    put("urn:oid:1.3.6.1.4.1.5923.1.1.1.10", "eduPersonTargetedID");
-                    put("urn:oid:1.3.6.1.4.1.5923.1.6.1.1", "eduCourseOffering");
-                }
-            };
 }
