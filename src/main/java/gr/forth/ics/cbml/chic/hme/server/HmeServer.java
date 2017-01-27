@@ -20,6 +20,7 @@ import com.github.pgasync.Db;
 import com.github.pgasync.Row;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.ModelRepository;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.SemanticStore;
+import gr.forth.ics.cbml.chic.hme.server.utils.FileUtils;
 import io.undertow.Handlers;
 import io.undertow.Undertow;
 import io.undertow.io.IoCallback;
@@ -262,7 +263,8 @@ public class HmeServer {
     }
 
     public static Db init() throws IOException {
-        previewsDir = Paths.get("/tmp", "hme-previews");
+        previewsDir = Paths.get(System.getProperty("java.io.tmpdir"), "hme-previews");
+        System.err.println("Preview (temp) dir: " + previewsDir);
         if (!previewsDir.toFile().exists())
             Files.createDirectories(previewsDir);
 
@@ -287,7 +289,7 @@ public class HmeServer {
 
     private static void apiError401(final HttpServerExchange exchange) {
         final String msg = "Authentication error: You need to login, please visit " +
-                "/hme2/login?url=" + exchange.getRequestPath();
+                BASE_PATH + "/login?url=" + exchange.getRequestPath();
         sendError(exchange, msg, StatusCodes.UNAUTHORIZED);
 
     }
@@ -302,9 +304,19 @@ public class HmeServer {
             exchange.getResponseHeaders().put(Headers.LOCATION, nextUrl);
             exchange.endExchange();
         };
-
-
     }
+
+    private static HttpHandler createLoginRedirectHandler(final String contParam, final String loginUrl) {
+        return exchange -> {
+            final String requestPath = exchange.getRequestPath();
+            final String nextUrl = loginUrl +"?" + contParam + "=" + requestPath;
+            exchange.setStatusCode(StatusCodes.FOUND);
+            exchange.getResponseHeaders().put(Headers.LOCATION, nextUrl);
+            exchange.endExchange();
+        };
+    }
+
+    private static String BASE_PATH = "/hme2";
 
     public static void main(String[] args) throws IOException {
 
@@ -339,30 +351,39 @@ public class HmeServer {
 
         final HttpHandler corsHandler = new CORSHandler().wrap(apiRoutes);
 
+        final String editorUrl = BASE_PATH + "/static/html/";
+        final HttpHandler loginHandler = createLoginHandler("url", editorUrl);
+        final HttpHandler redirectToLoginHandler = createLoginRedirectHandler("url", BASE_PATH + "/login");
+        final ResourceHandler resourceHandler = new ResourceHandler(
+                new PathResourceManager(Paths.get("/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme-ng/src"), 1024))
+                .setWelcomeFiles("index.html");
         HttpHandler rootHandler = Handlers.path()
                 // Redirect root path to /static to serve the index.html by default
-                .addExactPath("/", Handlers.redirect("/hme2/static"))
+                .addExactPath("/", new PredicateHandler(ChicAccount.authnPredicate(),
+                        Handlers.redirect(editorUrl), redirectToLoginHandler))
 
                 // Serve all static files from a folder
-                .addPrefixPath("/static", new ResourceHandler(
-                        new PathResourceManager(Paths.get("/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme-ng/src"), 1024))
-                        .setWelcomeFiles("index.html"))
+                .addPrefixPath("/static", new PredicateHandler(ChicAccount.authnPredicate(),
+                        resourceHandler, redirectToLoginHandler))
 
                 // REST API path
                 .addPrefixPath("/api", new PredicateHandler(ChicAccount.authnPredicate(), corsHandler, HmeServer::apiError401))
 
-                .addExactPath("/login", SecurityHandler.build(createLoginHandler("url", "/hme2/api/models"), samlConfig, "SAML2Client"))
+                .addExactPath("/login", SecurityHandler.build(loginHandler, samlConfig, "SAML2Client"))
 
                 // Security related endpoints:
                 .addExactPath("/metadata", exchange -> HmeServer.samlMetadata(exchange, samlConfig))
                 .addExactPath("/callback", CallbackHandler.build(samlConfig, null, true))
-                .addExactPath("/logout", new ApplicationLogoutHandler(samlConfig, "/hme2/?defaulturlafterlogout"));
+                .addExactPath("/logout", new ApplicationLogoutHandler(samlConfig, BASE_PATH + "/"));
 
 
+        final SessionCookieConfig sessionConfig = new SessionCookieConfig();
+        sessionConfig.setCookieName("HMESESSIONID");
+        sessionConfig.setPath(FileUtils.endWithSlash(BASE_PATH));
         final SessionAttachmentHandler sessionManager =
-                new SessionAttachmentHandler(Handlers.path().addPrefixPath("/hme2", rootHandler),
+                new SessionAttachmentHandler(Handlers.path().addPrefixPath(BASE_PATH, rootHandler),
                         new InMemorySessionManager("SessionManager"),
-                        new SessionCookieConfig());
+                        sessionConfig);
         Undertow server = Undertow.builder()
                 .addHttpListener(port, HmeServer.config.hostname())
                 .setWorkerThreads(20)
@@ -431,7 +452,7 @@ public class HmeServer {
 
         ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
         ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.out::println);
-        Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user-> "crafsrv");
+        Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
         final CompletableFuture<Map<String, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
         login.createToken(config.serviceAccountName(), config.serviceAccountPassword(), modelRepository.AUDIENCE, actAs)
@@ -551,14 +572,17 @@ public class HmeServer {
                     String etag = String.format("%d", version);
                     final ETag eTag = new ETag(false, etag);
 
+
+                    final HeaderMap responseHeaders = exchange.getResponseHeaders();
+                    responseHeaders.add(Headers.ETAG, eTag.toString());
                     if (ETagUtils.handleIfNoneMatch(exchange, eTag, eTag.isWeak())) {
                         try {
                             JSONObject js = rowToHypermodel(row);
-                            exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                            exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
-                            exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age:36500");
-                            exchange.getResponseHeaders()
-                                    .add(Headers.LAST_MODIFIED, DateUtils.toDateString(last_update));
+                            // Allow caching for 2 hours:
+                            // (https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control)
+                            responseHeaders.add(Headers.CACHE_CONTROL, "max-age:7200, private, must-revalidate");
+                            responseHeaders.add(Headers.CONTENT_TYPE, "application/json");
+                            responseHeaders.add(Headers.LAST_MODIFIED, DateUtils.toDateString(last_update));
                             exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
                         } catch (ParseException e) {
                             e.printStackTrace();
@@ -567,8 +591,6 @@ public class HmeServer {
                         }
                     } else {
                         exchange.setStatusCode(StatusCodes.NOT_MODIFIED);
-                        exchange.getResponseHeaders().add(Headers.ETAG, eTag.toString());
-
                         exchange.endExchange();
                     }
 
@@ -698,6 +720,7 @@ public class HmeServer {
         jsonObject.put("error", error);
 
         exchange.setStatusCode(code);
+        exchange.getResponseHeaders().clear();
         exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, contentType);
         exchange.getResponseSender().send(jsonObject.toJSONString(), IoCallback.END_EXCHANGE);
     }
