@@ -294,15 +294,20 @@ public class HmeServer {
 
     }
 
+    private static void redirect(final HttpServerExchange exchange, String uri)
+    {
+        exchange.setStatusCode(StatusCodes.FOUND);
+        exchange.getResponseHeaders().put(Headers.LOCATION, uri);
+        exchange.endExchange();
+    }
+
     private static HttpHandler createLoginHandler(final String contParam, final String homeUrl) {
         return exchange -> {
             final Map<String, Deque<String>> queryParameters = exchange.getQueryParameters();
             final String nextUrl = queryParameters.containsKey(contParam) ?
                     queryParameters.get(contParam).getFirst()
                     : homeUrl;
-            exchange.setStatusCode(StatusCodes.FOUND);
-            exchange.getResponseHeaders().put(Headers.LOCATION, nextUrl);
-            exchange.endExchange();
+            redirect(exchange, nextUrl);
         };
     }
 
@@ -310,9 +315,7 @@ public class HmeServer {
         return exchange -> {
             final String requestPath = exchange.getRequestPath();
             final String nextUrl = loginUrl +"?" + contParam + "=" + requestPath;
-            exchange.setStatusCode(StatusCodes.FOUND);
-            exchange.getResponseHeaders().put(Headers.LOCATION, nextUrl);
-            exchange.endExchange();
+            redirect(exchange, nextUrl);
         };
     }
 
@@ -361,6 +364,11 @@ public class HmeServer {
                 // Redirect root path to /static to serve the index.html by default
                 .addExactPath("/", new PredicateHandler(ChicAccount.authnPredicate(),
                         Handlers.redirect(editorUrl), redirectToLoginHandler))
+
+                .addPrefixPath("/h", new PredicateHandler(ChicAccount.authnPredicate(),
+                        routing(true).get("{uuid}",
+                                exchange -> redirect(exchange, editorUrl +"#" + exchange.getQueryParameters().get("uuid").getFirst())),
+                                redirectToLoginHandler))
 
                 // Serve all static files from a folder
                 .addPrefixPath("/static", new PredicateHandler(ChicAccount.authnPredicate(),
