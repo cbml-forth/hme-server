@@ -333,17 +333,17 @@ public class HmeServer {
 
 
         final ModelRepository modelRepository = new ModelRepository(10, true);
-        final SAMLLogin samlLogin = new SAMLLogin(config.secureTokenService());
         final String endpoint = config.sparqlRicordo();
         System.err.println("RICORDO : " + endpoint);
         final SemanticStore semanticStore = new SemanticStore(endpoint);
 
         final Config samlConfig = new SamlConfigFactory("https://ssfak.duckdns.org/hme2/").build();
 
+        final TokenManager tokenManager = new TokenManager(config.secureTokenService(), serverConfig.serviceAccountName(), serverConfig.serviceAccountPassword());
         final RoutingHandler apiRoutes = routing(true)
                 .get("/preview/{uuid}/{version}",
                         exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
-                .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, samlLogin, database, modelRepository, semanticStore)))
+                .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, tokenManager, database, modelRepository, semanticStore)))
 
                 .get("/hypermodels", exchange -> exchange.dispatch(() -> get_hypermodels(exchange, database)))
                 .post("/hypermodels", exchange -> exchange.dispatch(() -> save_hypermodel(exchange, database)))
@@ -388,14 +388,15 @@ public class HmeServer {
         final SessionCookieConfig sessionConfig = new SessionCookieConfig();
         sessionConfig.setCookieName("HMESESSIONID");
         sessionConfig.setPath(FileUtils.endWithSlash(BASE_PATH));
-        final SessionAttachmentHandler sessionManager =
+        final InMemorySessionManager sessionManager = new InMemorySessionManager("SessionManager");
+        final SessionAttachmentHandler sessionHandler =
                 new SessionAttachmentHandler(Handlers.path().addPrefixPath(BASE_PATH, rootHandler),
-                        new InMemorySessionManager("SessionManager"),
+                        sessionManager,
                         sessionConfig);
         Undertow server = Undertow.builder()
                 .addHttpListener(port, HmeServer.config.hostname())
                 .setWorkerThreads(20)
-                .setHandler(sessionManager).build();
+                .setHandler(sessionHandler).build();
 //                .setHandler(corsHandler).build();
         System.err.println("All ready.. Start listening on " + HmeServer.config.hostname() + ":" + port);
         server.start();
@@ -455,7 +456,7 @@ public class HmeServer {
         return semanticStore.send_query_and_parse(q);
     }
 
-    private static void getAllModels(HttpServerExchange exchange, SAMLLogin login, Db db, ModelRepository modelRepository, SemanticStore semanticStore) {
+    private static void getAllModels(HttpServerExchange exchange, TokenManager tokMgr, Db db, ModelRepository modelRepository, SemanticStore semanticStore) {
         System.err.println("-> getAllModels");
 
         ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
@@ -463,7 +464,7 @@ public class HmeServer {
         Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
         final CompletableFuture<Map<String, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
-        login.createToken(config.serviceAccountName(), config.serviceAccountPassword(), modelRepository.AUDIENCE, actAs)
+        tokMgr.getDelegationToken(exchange, modelRepository.AUDIENCE, actAs)
                 .thenCompose(modelRepository::getAllModels)
                 .thenCombine(mapCompletableFuture, (models, counts) -> models.stream().map(model -> {
                     final JSONObject json = model.toJSON();
