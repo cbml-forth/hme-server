@@ -25,6 +25,7 @@ import nu.xom.XPathContext;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -119,8 +120,17 @@ public class SAMLLogin implements AutoCloseable {
         return element.toXML();
     }
 
+    public CompletableFuture<SAMLToken> createToken(final String username, final String password, final String audience) {
+        return createTokenImpl(username, password, audience, Optional.empty());
+    }
 
-    public CompletableFuture<SAMLToken> createToken(final String username, final String password, final String audience, Optional<String> actAsUser) {
+    public CompletableFuture<SAMLToken> createDelegatedToken(final String username, final String password, final String audience, final String actsAs) {
+        Objects.requireNonNull(actsAs);
+        return createTokenImpl(username, password, audience, Optional.of(actsAs));
+    }
+
+
+    private CompletableFuture<SAMLToken> createTokenImpl(final String username, final String password, final String audience, Optional<String> actAsUser) {
 
         CompletableFuture<SAMLToken> fut = new CompletableFuture<>();
         try {

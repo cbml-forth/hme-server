@@ -303,6 +303,10 @@ public class HmeServer {
 
     private static HttpHandler createLoginHandler(final String contParam, final String homeUrl) {
         return exchange -> {
+            final Optional<ChicAccount> chicAccount = ChicAccount.currentUser(exchange);
+            if (chicAccount.isPresent()) {
+                Sessions.getSession(exchange).setAttribute("chicAccount", chicAccount.get());
+            }
             final Map<String, Deque<String>> queryParameters = exchange.getQueryParameters();
             final String nextUrl = queryParameters.containsKey(contParam) ?
                     queryParameters.get(contParam).getFirst()
@@ -397,7 +401,6 @@ public class HmeServer {
                 .addHttpListener(port, HmeServer.config.hostname())
                 .setWorkerThreads(20)
                 .setHandler(sessionHandler).build();
-//                .setHandler(corsHandler).build();
         System.err.println("All ready.. Start listening on " + HmeServer.config.hostname() + ":" + port);
         server.start();
     }
@@ -464,7 +467,7 @@ public class HmeServer {
         Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
         final CompletableFuture<Map<String, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
-        tokMgr.getDelegationToken(exchange, modelRepository.AUDIENCE, actAs)
+        tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
                 .thenCompose(modelRepository::getAllModels)
                 .thenCombine(mapCompletableFuture, (models, counts) -> models.stream().map(model -> {
                     final JSONObject json = model.toJSON();
