@@ -16,104 +16,43 @@
 package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
 
+import lombok.Builder;
+import lombok.Value;
+import lombok.experimental.Wither;
+import lombok.val;
+import net.minidev.json.JSONObject;
+
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
+@Value
+@Builder
 public class Input {
 
-    private String name;
-    private String description;
-    private boolean mandatory;
-    private Optional<String> defaultValue;
-    private boolean dynamic;
-    private String dataType;
-    private String unit;
-    private String range;
-    private String value;
+    int id;
+    UUID uuid;
+    String name;
+    String description;
+    boolean mandatory;
+    String defaultValue;
+    boolean dynamic;
+    String dataType;
+    String unit;
+    String range;
+    @Wither
+    String value;
 
     private List<String> semTypes;
 
-    public String getName() {
-        return name;
-    }
-
-    public void setName(String name) {
-        this.name = name;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public boolean isMandatory() {
-        return mandatory;
-    }
-
-    public void setMandatory(boolean mandatory) {
-        this.mandatory = mandatory;
-    }
-
     public Optional<String> getDefaultValue() {
-        return defaultValue;
+        return Optional.ofNullable(value);
     }
 
-    public void setDefaultValue(String defaultValue) {
-        this.defaultValue = Optional.ofNullable(defaultValue).filter(s -> !"".equals(s));
+    public Optional<String> getValue() {
+        return Optional.ofNullable(value);
     }
-
-    public boolean isDynamic() {
-        return dynamic;
-    }
-
-    public void setDynamic(boolean dynamic) {
-        this.dynamic = dynamic;
-    }
-
-    public String getDataType() {
-        return dataType;
-    }
-
-    public void setDataType(String dataType) {
-        this.dataType = dataType;
-    }
-
-    public String getUnit() {
-        return unit;
-    }
-
-    public void setUnit(String unit) {
-        this.unit = unit;
-    }
-
-    public String getRange() {
-        return range;
-    }
-
-    public void setRange(String range) {
-        this.range = range;
-    }
-
-    public String getValue() {
-        return value;
-    }
-
-    public void setValue(String value) {
-        this.value = value;
-    }
-
-
-    public List<String> getSemTypes() {
-        return semTypes;
-    }
-
-    public void setSemTypes(List<String> semTypes) {
-        this.semTypes = semTypes;
-    }
-
 
     public boolean isPatientSpecific()
     {
@@ -128,7 +67,42 @@ public class Input {
                 this.getDataType(),
                 this.getUnit(),
                 this.getRange(),
-                this.getDefaultValue(),
+                this.getDefaultValue().orElse(""),
                 this.getDescription());
+    }
+
+    public static Input fromJson(JSONObject jsonObject) {
+        val id = jsonObject.getAsNumber("id").intValue();
+        val uuid = UUID.fromString(jsonObject.getAsString("uuid"));
+        val dataType = jsonObject.getAsString("data_type");
+        val defaultValue = jsonObject.getAsString("default_value");
+        val description = jsonObject.getAsString("description").replace("\r", "").replace("\n", " ");
+
+        final List<String> semTypes = Arrays.asList(jsonObject.getAsString("semtype").split("\\s+"));
+
+        val dynamic = jsonObject.getAsNumber("is_static").intValue() == 0;
+
+        val mandatory = jsonObject.getAsNumber("is_mandatory").intValue() == 1;
+        val name = jsonObject.getAsString("name");
+        val range = jsonObject.getAsString("data_range");
+        val unit = jsonObject.getAsString("unit");
+        final Input input = Input.builder()
+                .id(id)
+                .uuid(uuid)
+                .name(name)
+                .description(description)
+                .mandatory(mandatory)
+                .defaultValue("".equals(defaultValue) ? null : defaultValue)
+                .dynamic(dynamic)
+                .dataType(dataType)
+                .unit(unit)
+                .range(range)
+                .semTypes(semTypes)
+                .build();
+        /*
+        Input input = new Input(id, uuid, name, description, mandatory,
+                "".equals(defaultValue) ? null : defaultValue,
+                dynamic, dataType, unit, range, null, semTypes);*/
+        return input;
     }
 }

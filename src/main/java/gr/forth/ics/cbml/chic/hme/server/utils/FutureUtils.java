@@ -15,11 +15,13 @@
  */
 package gr.forth.ics.cbml.chic.hme.server.utils;
 
+import lombok.experimental.UtilityClass;
 import rx.Observable;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static java.util.stream.Collectors.toList;
@@ -27,6 +29,7 @@ import static java.util.stream.Collectors.toList;
 /**
  * Created by ssfak on 29/12/15.
  */
+@UtilityClass
 public class FutureUtils {
 
     public static <T> CompletableFuture<T> fromObservable(Observable<T> observable) {
@@ -96,6 +99,14 @@ public class FutureUtils {
         List<R> results_so_far = new ArrayList<>(data.size());
         waterfall_i(data, future, process, results_so_far, concurrency);
         return future;
+
+    }
+
+    public static <U, V, T> CompletableFuture<T> thenComposeBoth(CompletableFuture<? extends U> one,
+                                                                 CompletableFuture<? extends V> another,
+                                                                 BiFunction<? super U, ? super V, ? extends CompletableFuture<T>> fn) {
+        return CompletableFuture.allOf(one, another)
+                .thenCompose(__ -> fn.apply(one.join(), another.join()));
 
     }
 

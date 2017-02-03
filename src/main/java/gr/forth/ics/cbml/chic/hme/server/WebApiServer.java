@@ -216,12 +216,12 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public Response onCompleted(Response response) throws Exception {
                                 req_in_flight.release();
+                                self.total_req.incrementAndGet();
+                                whereToSave.flush();
+                                whereToSave.close();
                                 if (response.getStatusCode() == 200) {
-                                    whereToSave.flush();
-                                    whereToSave.close();
                                     fut.complete(null);
                                 }
-                                self.total_req.incrementAndGet();
                                 return response;
                             }
                         });

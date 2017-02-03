@@ -18,16 +18,16 @@ package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 import gr.forth.ics.cbml.chic.hme.server.SAMLToken;
 import gr.forth.ics.cbml.chic.hme.server.WebApiServer;
 import gr.forth.ics.cbml.chic.hme.server.utils.FutureUtils;
+import lombok.Value;
+import lombok.extern.java.Log;
+import lombok.val;
 import net.minidev.json.JSONObject;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
@@ -35,12 +35,13 @@ import java.util.stream.Collectors;
 /**
  * Created by ssfak on 28/12/15.
  */
+@Log
 public class ModelRepository implements AutoCloseable {
     public final static String AUDIENCE = "https://mr.chic-vph.eu/";
     final static String BASE_URI = AUDIENCE + "model_app/";
     final WebApiServer apiServer;
 
-    public ModelRepository(int concurrency, boolean useCache) {
+    public ModelRepository(int concurrency) {
         this.apiServer = new WebApiServer(concurrency);
     }
 
@@ -48,6 +49,25 @@ public class ModelRepository implements AutoCloseable {
         return this.apiServer;
     }
 
+    enum WorkflowKind {
+        T2FLOW, XMML, OTHER;
+
+        public static WorkflowKind fromString(String text) {
+            if ("t2flow".equalsIgnoreCase(text))
+                return T2FLOW;
+            if ("xmml".equalsIgnoreCase(text))
+                return XMML;
+            return OTHER;
+        }
+
+        public String toFileKind() {
+            if (this == T2FLOW)
+                return "t2flow";
+            if (this == XMML)
+                return "xmml";
+            return "other";
+        }
+    }
     enum Model_Cache {
 
         INSTANCE;
@@ -90,46 +110,29 @@ public class ModelRepository implements AutoCloseable {
     }
 
 
+    @Value
     public static class File {
         String id;
         String sha;
         String description;
         String kind;
 
-
         public static File fromJSON(final JSONObject jsonFile) {
-            final File f = new File();
-            f.id = jsonFile.getAsString("id");
-            f.sha = jsonFile.getAsString("sha1sum");
-            f.description = jsonFile.getAsString("description");
-            f.kind = jsonFile.getAsString("kind");
-            return f;
+            val id = jsonFile.getAsString("id");
+            val sha = jsonFile.getAsString("sha1sum");
+            val description = jsonFile.getAsString("description");
+            val kind = jsonFile.getAsString("kind");
+            return new File(id, sha, description, kind);
         }
-
-        public String getId() {
-            return id;
-        }
-
-        public String getDescription() {
-            return description;
-        }
-
-        public String getKind() {
-            return kind;
-        }
-
-        public String getSha() {
-            return sha;
-        }
-
-
     }
 
     public void clearCache()
     {
         Model_Cache.INSTANCE.clear();
     }
-    public CompletableFuture<List<File>> getModelFilesJSON(final String modelId, final SAMLToken token) {
+
+    public CompletableFuture<List<File>> getModelFilesJSON(final String modelId,
+                                                           final SAMLToken token) {
         final String url = BASE_URI + "getFilesByToolId/";
         HashMap<String, String> qs = new HashMap<>();
         qs.put("tool_id", modelId);
@@ -141,22 +144,22 @@ public class ModelRepository implements AutoCloseable {
                         .collect(Collectors.toList()));
     }
 
-    public CompletableFuture<File> getWorkflowFileForModel(final String modelId, final SAMLToken token) {
+    public CompletableFuture<Optional<File>> getWorkflowFileForModel(final String modelId,
+                                                                     final SAMLToken token)
+    {
         return this.getModelFilesJSON(modelId, token)
-                .thenApply(list -> {
-                    for (File f: list) {
-                        if (f.kind == "t2flow")
-                            return f;
-                    }
-                    return null;
-                });
+                .thenApply(list -> list.stream()
+                        .filter(f -> WorkflowKind.fromString(f.kind) != WorkflowKind.OTHER)
+                        .findAny());
     }
 
     public static String fileUrl(final String file_id) {
         return BASE_URI + "getFileById/?id=" + file_id;
     }
 
-    public CompletableFuture<java.io.File> downloadFile(final String fileId, final SAMLToken token) throws IOException {
+    public CompletableFuture<java.io.File> downloadFile(final String fileId,
+                                                        final SAMLToken token) throws IOException
+    {
         final String url = BASE_URI + "getFileById/";
         HashMap<String, String> qs = new HashMap<>();
         qs.put("id", fileId);
@@ -165,32 +168,44 @@ public class ModelRepository implements AutoCloseable {
         final Path tempFile = Files.createTempFile("", ".data");
         final FileOutputStream outputStream = new FileOutputStream(tempFile.toFile());
 
-        CompletableFuture<java.io.File> fut = new CompletableFuture<>();
-        this.apiServer.downloadContent(url, token, qs, outputStream)
-                .whenComplete((v, ex)->{
-                    if (ex != null)
-                        fut.completeExceptionally(ex);
-                    else
-                        fut.complete(tempFile.toFile());
+        return this.apiServer.downloadContent(url, token, qs, outputStream)
+                .thenApply(__ -> tempFile.toFile());
+    }
+
+
+    private CompletableFuture<Model> fillModelParams(final Model model,
+                                                     final SAMLToken token)
+    {
+        return getModelParamsJSON(model.getId(), token)
+                .thenApplyAsync(js -> {
+                    List<Input> inputs = new ArrayList<>();
+                    List<Output> outputs = new ArrayList<>();
+
+                    js.values().forEach(o -> {
+                        JSONObject jsonObject = (JSONObject) o;
+                        final boolean isOutput = jsonObject.getAsNumber("is_output").intValue() == 1;
+                        if (isOutput)
+                            outputs.add(Output.fromJson(jsonObject));
+                        else
+                            inputs.add(Input.fromJson(jsonObject));
+                    });
+                    inputs.sort(Comparator.comparing(Input::getId));
+                    outputs.sort(Comparator.comparing(Output::getId));
+
+                    model.setInputs(inputs);
+                    model.setOutputs(outputs);
+                    return model;
+                })
+                .whenComplete((m, ex) -> {
+                    if (m != null)
+                        cacheModel(m);
                 });
-        return fut;
     }
 
 
-    public CompletableFuture<List<Input>> getModelInputs(final String modelId, final SAMLToken token) {
-        final CompletableFuture<JSONObject> jsonAsync = getModelParamsJSON(modelId, token);
-
-        return jsonAsync.thenApplyAsync(this::getInputsFromJSON);
-    }
-
-
-    public CompletableFuture<List<Output>> getModelOutputs(final String modelId, final SAMLToken token) {
-        final CompletableFuture<JSONObject> jsonAsync = getModelParamsJSON(modelId, token);
-
-        return jsonAsync.thenApplyAsync(this::getOutputsFromJSON);
-    }
-
-    public CompletableFuture<Model> getModel(final String modelId, final SAMLToken token) {
+    public CompletableFuture<Model> getModel(final String modelId,
+                                             final SAMLToken token)
+    {
 
         if (Model_Cache.INSTANCE.contains(modelId))
             return CompletableFuture.completedFuture(Model_Cache.INSTANCE.get(modelId));
@@ -199,10 +214,7 @@ public class ModelRepository implements AutoCloseable {
         final CompletableFuture<JSONObject> modelJSONFut = getModelJSON(modelId, token);
         return modelJSONFut.thenCombineAsync(paramsJSONFut,
                 (modelJson, paramsJson) -> {
-                    final String name = modelJson.getAsString("title");
-                    final String description = modelJson.getAsString("description");
-                    final String uuid = modelJson.getAsString("uuid");
-                    final Model model = new Model(modelId, name, description, uuid);
+                    final Model model = parseModelJson(modelJson);
 
                     model.setInputs(this.getInputsFromJSON(paramsJson));
                     model.setOutputs(this.getOutputsFromJSON(paramsJson));
@@ -212,19 +224,45 @@ public class ModelRepository implements AutoCloseable {
                 });
     }
 
+    private static Model parseModelJson(JSONObject modelJson) {
+        final String modelId = modelJson.getAsString("id");
+        final String name = modelJson.getAsString("title");
+        final String description = modelJson.getAsString("description");
+        final UUID uuid = UUID.fromString(modelJson.getAsString("uuid"));
+        final Number strongly_coupled = modelJson.getAsNumber("strongly_coupled");
+        final Number isFrozenNum = modelJson.getAsNumber("freezed");
+        final boolean isStronglyCoupled = strongly_coupled != null && strongly_coupled.intValue() != 0;
+        final boolean isFrozen = isFrozenNum != null && isFrozenNum.intValue() != 0;
+        return new Model(modelId, name, description, uuid, isStronglyCoupled, isFrozen);
+    }
+
+
+    private void cacheModel(final Model m)
+    {
+        Model_Cache.INSTANCE.put(m.getId(), m);
+        log.info("Caching model " +  m.getId());
+    }
 
     public CompletableFuture<List<Model>> getAllModels(final SAMLToken token) {
         final String url = BASE_URI + "getAllTools/";
         return this.apiServer.getJsonAsync(url, token)
                 .thenApply(JSONObject.class::cast)
                 .thenCompose(jsonObject -> {
-                    final List<CompletableFuture<Model>> futureList = jsonObject.values().stream()
-                            .map(JSONObject.class::cast)
-                            .map(js -> {
-                                String modelId = js.getAsString("id");
-                                return this.getModel(modelId, token);
-                            })
-                            .collect(Collectors.toList());
+                    final List<CompletableFuture<Model>> futureList =
+                            jsonObject.values().stream()
+                                    .map(JSONObject.class::cast)
+                                    .map(js -> {
+                                        String modelId = js.getAsString("id");
+                                        boolean isCached = Model_Cache.INSTANCE.contains(modelId);
+                                        if (isCached) {
+                                            final Model model = Model_Cache.INSTANCE.get(modelId);
+                                            return CompletableFuture.completedFuture(model);
+                                        } else {
+                                            final Model model = parseModelJson(js);
+                                            return this.fillModelParams(model, token);
+                                        }
+                                    })
+                                    .collect(Collectors.toList());
                     return FutureUtils.sequence(futureList);
                 });
     }
@@ -234,41 +272,101 @@ public class ModelRepository implements AutoCloseable {
         return js.values().stream()
                 .map(obj -> (JSONObject) obj)
                 .filter(obj -> obj.getAsNumber("is_output").intValue() == 0)
-                .map(jsonObject -> {
-                    Input in = new Input();
-                    in.setDataType(jsonObject.getAsString("data_type"));
-                    in.setDefaultValue(jsonObject.getAsString("default_value"));
-                    in.setDescription(jsonObject.getAsString("description").replace("\r", "").replace("\n", " "));
-
-                    final List<String> semTypes = Arrays.asList(jsonObject.getAsString("semtype").split("\\s+"));
-                    in.setSemTypes(semTypes);
-                    in.setDynamic(jsonObject.getAsNumber("is_static").intValue() == 0);
-
-                    in.setMandatory(jsonObject.getAsNumber("is_mandatory").intValue() == 1);
-                    in.setName(jsonObject.getAsString("name"));
-                    in.setRange(jsonObject.getAsString("data_range"));
-                    in.setUnit(jsonObject.getAsString("unit"));
-                    return in;
-                })
+                .map(Input::fromJson)
                 .collect(Collectors.toList());
     }
+
 
 
     private List<Output> getOutputsFromJSON(final JSONObject js) {
         return js.values().stream()
                 .map(obj -> (JSONObject) obj)
                 .filter(obj -> obj.getAsNumber("is_output").intValue() == 1)
-                .map(jsonObject -> {
-                    Output out = new Output();
-                    out.setDataType(jsonObject.getAsString("data_type"));
-                    out.setDefaultValue(jsonObject.getAsString("default_value"));
-                    out.setDescription(jsonObject.getAsString("description"));
-                    out.setDynamic(jsonObject.getAsNumber("is_static").intValue() == 0);
-                    out.setName(jsonObject.getAsString("name"));
-                    out.setUnit(jsonObject.getAsString("unit"));
-                    return out;
-                })
+                .map(Output::fromJson)
                 .collect(Collectors.toList());
+    }
+
+
+    public CompletableFuture<String> storeModelAndWorkflow(String title, String description, String version,
+                                                           boolean isStronglyCoupled,
+                                                           WorkflowKind kind,
+                                                           String workflowDescription,
+                                                           SAMLToken token) {
+        return this.storeModel(title, description, version, isStronglyCoupled, token)
+                .thenCompose(modelId -> {
+                    String fileTitle = String.valueOf((title + ":" + version + "." + kind).hashCode());
+                    return this.storeWorkflowDescriptionForModel(modelId, fileTitle, kind, workflowDescription, token)
+                            .thenApply(fileId -> modelId);
+                });
+    }
+
+    private CompletableFuture<String> storeModel(String title, String description, String version,
+                                                 boolean isStronglyCoupled, SAMLToken token) {
+        /*
+        storeTool is a POST HTTP method used for storing a new model/tool (basic information).
+        storeTool method accepts 7 input parameter which should all be passed through request body.
+        Encoding: application/x-­‐www-­‐form-­‐urlencoded. These input parameters are the following:
+
+          title -> Required. (title of model/tool)
+          version -> Required. (version of model/tool. Should be in the format X.X for example 1.2)
+          extra_parameters -> Not Required. (A string of flag-value pairs that should be included in command line)
+          executable_path -> Not Required. (The relative path of the executable inside zip folder)
+          strongly_coupled -> Required. (Is a strongly coupled model? 1 for true and 0 for false)
+          description -> Not required. (description of model/tool)
+          comment -> Not required. (comments on model/tool)
+          semtype -> Not required. (url representing semantic information regarding this model/tool)
+
+         The JSON object returned by method storeTool has one key, named id, and one value
+         which is associated with this key.
+         */
+        Map<String, String> m = new HashMap<String, String>() {{
+            put("title", title);
+            put("version", version);
+            put("strongly_coupled", isStronglyCoupled ? "1" : "0");
+            put("description", description);
+        }} ;
+        final String url = BASE_URI + "storeTool/";
+        return this.apiServer.postForm(url, token, m)
+                .thenApply(JSONObject.class::cast)
+                .thenApply(jsonObject -> jsonObject.getAsString("id"));
+
+    }
+
+    private CompletableFuture<String> storeWorkflowDescriptionForModel(String modelId, String title,
+                                                                       WorkflowKind kind,
+                                                                       String workflowDescription,
+                                                                       SAMLToken token) {
+        /*
+        storeFile is a POST HTTP method used for storing a new file (along with its metadata).
+        This file should be always associated with a model/tool.
+        storeFile method accepts 9 input parameter which should all be passed through request body.
+        Encoding: Multipart/form-data. These input parameters are the following:
+            file -> Required. (The actual file (blob))
+            tool_id -> Required. (link to the model/tool)
+            title -> Required. (title of the file.)
+            description -> Not required. (description of the file)
+            kind -> Not required. (type of the file (document, source code, binary, etc.)
+            license -> Not required. (license regarding this file)
+            sha1sum -> Not required. (sha1sum of this file)
+            comment -> Not required. (comments on this file)
+            engine -> Not required. (engine suitable for running this file)
+         The JSON object returned by method storeFile has one key, named id,
+         and one value which is associated with this key.
+         */
+
+        final String url = BASE_URI + "storeFile/";
+        Map<String, String> m = new HashMap<String, String>() {{
+            put("file", workflowDescription);
+            put("tool_id", modelId);
+            put("title", title);
+            put("kind", kind.toFileKind());
+            put("description", "Workflow description for this hypermodel");
+            put("comment", "Uploaded by HME");
+        }};
+        return this.apiServer.postFormMultipart(url, token, m)
+                .thenApply(JSONObject.class::cast)
+                .thenApply(jsonObject -> jsonObject.getAsString("id"));
+
     }
 
     @Override

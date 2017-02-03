@@ -15,70 +15,31 @@
  */
 package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
+import lombok.Data;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 
 import java.util.List;
+import java.util.UUID;
 
-/**
- *
- * @author vkrits
- */
+
+@Data
 public class Model {
 
-    private final String id;
-    private final String name;
-    private final String description;
-    private final String uuid;
-    private List<Input> inputs;
-    private List<Output> outputs;
-    private boolean frozen = false;
-
-    public Model(final String id, final String name, final String description, final String uuid)
-    {
-        this.id = id;
-        this.name = name;
-        this.description = description;
-        this.uuid = uuid;
-    }
-
-    public String getUuid() {
-        return uuid;
-    }
-
-    public String getId() {
-        return id;
-    }
-
-    public String getName() {
-        return name;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public List<Input> getInputs() {
-        return inputs;
-    }
-
-    public void setInputs(List<Input> inputs) {
-        this.inputs = inputs;
-    }
-
-    public List<Output> getOutputs() {
-        return outputs;
-    }
-
-    public void setOutputs(List<Output> outputs) {
-        this.outputs = outputs;
-    }
+    final String id;
+    final String name;
+    final String description;
+    final UUID uuid;
+    final boolean isStronglyCoupled;
+    final boolean frozen;
+    List<Input> inputs;
+    List<Output> outputs;
 
     public JSONObject toJSON () {
         final JSONObject jsonObject = new JSONObject();
         jsonObject.put("id", Integer.parseInt(this.getId())); // XXX
         jsonObject.put("title", this.getName());
-        jsonObject.put("uuid", this.getUuid());
+        jsonObject.put("uuid", this.getUuid().toString());
         jsonObject.put("description", this.getDescription());
         jsonObject.put("freezed", this.frozen);
 

@@ -15,92 +15,45 @@
  */
 package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
-/**
- *
- * @author vkrits
- */
+import lombok.Value;
+import lombok.experimental.Wither;
+import lombok.val;
+import net.minidev.json.JSONObject;
+
+import java.util.UUID;
+
+@Value
 public class Output {
+    int id;
+    String name;
+    UUID uuid;
+    String description;
+    boolean mandatory;
+    String defaultValue;
+    boolean dynamic;
+    String dataType;
+    String unit;
+    String range;
+    @Wither String value;
 
-    private String name;
-    private String description;
-    private boolean mandatory;
-    private String defaultValue;
-    private boolean dynamic;
-    private String dataType;
-    private String unit;
-    private String range;
-    private String value;
+    public static Output fromJson(JSONObject jsonObject) {
 
-    public String getName() {
-        return name;
+        val id = jsonObject.getAsNumber("id").intValue();
+        val dataType = jsonObject.getAsString("data_type");
+        val defValue = jsonObject.getAsString("default_value");
+        val description = jsonObject.getAsString("description");
+        val dynamic = jsonObject.getAsNumber("is_static").intValue() == 0;
+        val mandatory = jsonObject.getAsNumber("is_mandatory").intValue() != 0;
+        val name = jsonObject.getAsString("name");
+        val unit = jsonObject.getAsString("unit");
+        val range = jsonObject.getAsString("data_range");
+        val uuid = UUID.fromString(jsonObject.getAsString("uuid"));
+        val value = "";
+        Output p = new Output(id, name, uuid, description, mandatory, defValue, dynamic, dataType, unit, range, value);
+        return p;
     }
 
-    public void setName(String name) {
-        this.name = name;
+    public int getId() {
+        return this.id;
     }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public boolean isMandatory() {
-        return mandatory;
-    }
-
-    public void setMandatory(boolean mandatory) {
-        this.mandatory = mandatory;
-    }
-
-    public String getDefaultValue() {
-        return defaultValue;
-    }
-
-    public void setDefaultValue(String defaultValue) {
-        this.defaultValue = defaultValue;
-    }
-
-    public boolean isDynamic() {
-        return dynamic;
-    }
-
-    public void setDynamic(boolean dynamic) {
-        this.dynamic = dynamic;
-    }
-
-    public String getDataType() {
-        return dataType;
-    }
-
-    public void setDataType(String dataType) {
-        this.dataType = dataType;
-    }
-
-    public String getUnit() {
-        return unit;
-    }
-
-    public void setUnit(String unit) {
-        this.unit = unit;
-    }
-
-    public String getRange() {
-        return range;
-    }
-
-    public void setRange(String range) {
-        this.range = range;
-    }
-
-    public String getValue() {
-        return value;
-    }
-
-    public void setValue(String value) {
-        this.value = value;
-    }
-
 }

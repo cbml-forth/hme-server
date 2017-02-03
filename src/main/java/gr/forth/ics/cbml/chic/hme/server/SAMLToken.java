@@ -15,11 +15,13 @@
  */
 package gr.forth.ics.cbml.chic.hme.server;
 
+import lombok.extern.slf4j.Slf4j;
 import nu.xom.*;
 
 import javax.xml.bind.DatatypeConverter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -31,6 +33,7 @@ import java.util.zip.Inflater;
 /**
  * Created by ssfak on 14/12/15.
  */
+@Slf4j
 public class SAMLToken {
     private Element xml;
     private Map<String, String> assertions;
@@ -61,7 +64,7 @@ public class SAMLToken {
             return fromXml(element);
         }
         catch (Exception e) {
-            e.printStackTrace();
+            log.error("XML parse", e);
         }
         return Optional.empty();
     }
@@ -105,7 +108,7 @@ public class SAMLToken {
             return fromXml(element);
 
         } catch (Exception e) {
-            e.printStackTrace();
+            log.error("Token parse", e);
         }
         return Optional.empty();
     }
@@ -179,4 +182,9 @@ public class SAMLToken {
         this.assertions = assertions;
     }
 
+    public String getUserId() {
+        if (assertions.containsKey("urn:custodix:ciam:1.0:principal:uuid"))
+            return assertions.get("urn:custodix:ciam:1.0:principal:uuid");
+        return assertions.getOrDefault("urn:oid:0.9.2342.19200300.100.1.1", "");
+    }
 }
