@@ -16,33 +16,34 @@
 package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
 import lombok.Data;
-import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 
 @Data
 public class Model {
-
-    final String id;
+    final RepositoryId id;
     final String name;
     final String description;
     final UUID uuid;
     final boolean isStronglyCoupled;
     final boolean frozen;
-    List<Input> inputs;
-    List<Output> outputs;
+    List<ModelParameter> inputs;
+    List<ModelParameter> outputs;
 
-    public JSONObject toJSON () {
+    public JSONObject toJSON() {
         final JSONObject jsonObject = new JSONObject();
-        jsonObject.put("id", Integer.parseInt(this.getId())); // XXX
+        jsonObject.put("id", this.id.toJSON());
         jsonObject.put("title", this.getName());
         jsonObject.put("uuid", this.getUuid().toString());
         jsonObject.put("description", this.getDescription());
-        jsonObject.put("freezed", this.frozen);
+        jsonObject.put("frozen", this.frozen);
 
+        /*
         final JSONArray inPorts = new JSONArray();
         this.inputs.forEach(input -> {
             final JSONObject param = new JSONObject();
@@ -66,7 +67,11 @@ public class Model {
             outPorts.add(param);
         });
         jsonObject.put("outPorts", outPorts);
+        */
+        jsonObject.put("inPorts", this.inputs == null ? Collections.emptyList() : this.inputs.stream().map(ModelParameter::toJson).collect(Collectors.toList()));
+        jsonObject.put("outPorts", this.outputs == null ? Collections.emptyList() : this.outputs.stream().map(ModelParameter::toJson).collect(Collectors.toList()));
 
+        jsonObject.put("perspectives", null);
         return jsonObject;
     }
 }

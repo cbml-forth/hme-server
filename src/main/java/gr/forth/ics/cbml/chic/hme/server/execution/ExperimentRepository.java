@@ -6,6 +6,7 @@ package gr.forth.ics.cbml.chic.hme.server.execution;
 
 import gr.forth.ics.cbml.chic.hme.server.SAMLToken;
 import gr.forth.ics.cbml.chic.hme.server.WebApiServer;
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.RepositoryId;
 import gr.forth.ics.cbml.chic.hme.server.utils.FutureUtils;
 import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONObject;
@@ -42,45 +43,45 @@ public class ExperimentRepository implements AutoCloseable {
     }
 
 
-    private ConcurrentHashMap<String, Trial> trialCache_ = new ConcurrentHashMap<>();
+    private ConcurrentHashMap<RepositoryId, Trial> trialCache_ = new ConcurrentHashMap<>();
 
-    private CompletableFuture<Trial> getTrialByModelId(final String modelId, final SAMLToken token) {
+    private CompletableFuture<Trial> getTrialByModelId(final RepositoryId modelId, final SAMLToken token) {
 
         return this.apiServer.getJsonAsync(API_BASE_URI + "getTrialByModelId/", token,
-                Collections.singletonMap("id", modelId))
+                Collections.singletonMap("id", modelId.getId()+""))
                 .thenApply(jsonAware -> {
                     JSONObject jsonObject = (JSONObject) jsonAware;
                     if (!jsonObject.containsKey("id")) { // not found
                         return null;
                     }
 
-                    final Trial trial = new Trial(jsonObject.getAsString("id"), jsonObject.getAsString("model_id"));
+                    final Trial trial = new Trial(RepositoryId.fromJsonObj(jsonObject, "id"), RepositoryId.fromJsonObj(jsonObject,"model_id"));
                     ExperimentRepository.this.trialCache_.put(trial.id, trial);
                     return trial;
                 });
     }
 
 
-    public CompletableFuture<Trial> getTrialById(final SAMLToken token, final String trial_id) {
+    public CompletableFuture<Trial> getTrialById(final SAMLToken token, final RepositoryId trial_id) {
         if (trialCache_.containsKey(trial_id))
             return CompletableFuture.completedFuture(trialCache_.get(trial_id));
 
         return this.apiServer.getJsonAsync(API_BASE_URI + "getTrialById/", token,
-                Collections.singletonMap("id", trial_id))
+                Collections.singletonMap("id", trial_id.getId()+""))
                 .thenApply(jsonAware -> {
                     JSONObject jsonObject = (JSONObject) jsonAware;
                     if (jsonObject.isEmpty()) { // not found
                         return null;
                     }
 
-                    final Trial trial = new Trial(trial_id, jsonObject.getAsString("model_id"));
+                    final Trial trial = new Trial(trial_id, RepositoryId.fromJsonObj(jsonObject, "model_id"));
                     trial.setDescription(jsonObject.getAsString("description"));
                     ExperimentRepository.this.trialCache_.put(trial.id, trial);
                     return trial;
                 });
     }
 
-    public CompletableFuture<Trial> createNewOrReturnExistingTrial(final String modelId,
+    public CompletableFuture<Trial> createNewOrReturnExistingTrial(final RepositoryId modelId,
                                                                    final String description,
                                                                    final SAMLToken token) {
 
@@ -88,11 +89,12 @@ public class ExperimentRepository implements AutoCloseable {
                 .thenCompose(trial -> {
                     if (trial == null) {
                         HashMap<String, String> form = new HashMap<>();
-                        form.put("model_id", modelId);
+                        form.put("model_id", modelId.getId()+"");
                         form.put("description", description);
 
                         return this.apiServer.postForm(API_BASE_URI + "storeTrial/", token, form)
-                                .thenApply(jsonObject -> new Trial(((JSONObject) jsonObject).getAsString("id"), modelId));
+                                .thenApply(JSONObject.class::cast)
+                                .thenApply(jsonObject -> new Trial(RepositoryId.fromJsonObj(jsonObject,"id"), modelId));
                     }
                     return CompletableFuture.completedFuture(trial);
                 });
@@ -175,7 +177,7 @@ public class ExperimentRepository implements AutoCloseable {
                                                                   final String subject_id_out,
                                                                   final SAMLToken token) {
         HashMap<String, String> form = new HashMap<>();
-        form.put("trial_id", trial.id);
+        form.put("trial_id", trial.id.getId()+"");
         form.put("description", description);
         form.put("subject_id_in", subject_id_in);
         form.put("subject_id_out", subject_id_out);
@@ -212,7 +214,7 @@ public class ExperimentRepository implements AutoCloseable {
      * @param token                  The SAMLToken of the principal / user
      * @return The Experiment object.
      */
-    public CompletableFuture<Experiment> createNewExperiment(final String modelId,
+    public CompletableFuture<Experiment> createNewExperiment(final RepositoryId modelId,
                                                              final String experiment_description,
                                                              final String patient_pseudonym,
                                                              final SAMLToken token) {
@@ -220,7 +222,7 @@ public class ExperimentRepository implements AutoCloseable {
                 experiment_description, patient_pseudonym, "Inputs", "Outputs", token);
     }
 
-    public CompletableFuture<Experiment> createNewExperiment(final String modelId,
+    public CompletableFuture<Experiment> createNewExperiment(final RepositoryId modelId,
                                                              final String trial_description,
                                                              final String experiment_description,
                                                              final String patient_pseudonym,
@@ -271,7 +273,7 @@ public class ExperimentRepository implements AutoCloseable {
                         exp.setModifiedOn(LocalDateTime.ofInstant(parseDateTime.toInstant(), parseDateTime.getTimeZone().toZoneId()));
                     }
 
-                    exp.trial = new Trial(jsonExp.getAsString("trial_id"));
+                    exp.trial = new Trial(RepositoryId.fromJsonObj(jsonExp, "trial_id"));
                     exp.setSubjectIn(new Subject(jsonExp.getAsString("subject_id_in")));
                     exp.setSubjectOut(new Subject(jsonExp.getAsString("subject_id_out")));
                     return fillExperiment(token, exp);
@@ -307,7 +309,7 @@ public class ExperimentRepository implements AutoCloseable {
                         exp.setModifiedOn(LocalDateTime.ofInstant(parseDateTime.toInstant(), parseDateTime.getTimeZone().toZoneId()));
                     }
 
-                    exp.trial = new Trial(jsonExp.getAsString("trial_id"));
+                    exp.trial = new Trial(RepositoryId.fromJsonObj(jsonExp, "trial_id"));
                     exp.setSubjectIn(new Subject(jsonExp.getAsString("subject_id_in")));
                     exp.setSubjectOut(new Subject(jsonExp.getAsString("subject_id_out")));
                     return fillExperiment(token, exp);
@@ -365,7 +367,7 @@ public class ExperimentRepository implements AutoCloseable {
         }
 
         final JSONObject trial = (JSONObject) jsonExp.get("trial");
-        exp.trial = new Trial(trial.getAsString("id"), trial.getAsString("model_id"));
+        exp.trial = new Trial(RepositoryId.fromJsonObj(trial, "id"), RepositoryId.fromJsonObj(trial,"model_id"));
         final JSONObject subject_in_js = (JSONObject) jsonExp.get("subject_id_in");
 
         final Subject subjectIn = new Subject(subject_in_js.getAsString("id"), subject_in_js.getAsString("description"));

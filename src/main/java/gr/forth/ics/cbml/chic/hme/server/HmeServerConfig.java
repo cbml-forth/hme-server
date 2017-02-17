@@ -63,4 +63,27 @@ public interface HmeServerConfig extends Config, Accessible {
     @DefaultValue("hme")
     String dbName();
 
+    @Key("rabbimq.host")
+    @DefaultValue("127.0.0.1")
+    String amqpHost();
+
+    @Key("rabbimq.port")
+    @DefaultValue("5672")
+    int amqpPort();
+
+    @Key("rabbimq.user")
+    @DefaultValue("chic")
+    String amqpUser();
+
+    @Key("rabbimq.password")
+    @DefaultValue("chic")
+    String amqpPassword();
+
+    @Key("rabbimq.vhost")
+    @DefaultValue("chic")
+    String amqpVirtualHost();
+
+    @Key("rabbimq.threads")
+    @DefaultValue("3")
+    int amqpThreadsNbr();
 }

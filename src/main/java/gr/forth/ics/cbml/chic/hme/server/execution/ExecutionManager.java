@@ -2,10 +2,7 @@ package gr.forth.ics.cbml.chic.hme.server.execution;
 
 import gr.forth.ics.cbml.chic.hme.server.SAMLToken;
 import gr.forth.ics.cbml.chic.hme.server.TokenManager;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.Input;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.Model;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.ModelRepository;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.Output;
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.*;
 import gr.forth.ics.cbml.chic.hme.server.utils.FutureUtils;
 import gr.forth.ics.cbml.chic.hme.server.utils.ZipUtils;
 import nu.xom.*;
@@ -46,7 +43,7 @@ public class ExecutionManager {
         this.execFramework = execFramework;
     }
 
-    public CompletableFuture<Experiment> runHypermodel(final String hyperModelId,
+    public CompletableFuture<Experiment> runHypermodel(final RepositoryId hyperModelId,
                                                        final String experiment_description,
                                                        final String patient_pseudonym,
                                                        final List<Input> inputs,
@@ -65,7 +62,7 @@ public class ExecutionManager {
 
     }
 
-    public CompletableFuture<List<Input>> getExecutionInputs(final UUID experimentId,
+    public CompletableFuture<List<ModelParameter>> getExecutionInputs(final UUID experimentId,
                                                              final String actAs) {
         final CompletableFuture<SAMLToken> expRepoTokenFut = this.tokenManager.getDelegationToken(expRepository.AUDIENCE, actAs);
         final CompletableFuture<SAMLToken> modelRepoTokenFut = this.tokenManager.getDelegationToken(modelRepository.AUDIENCE, actAs);
@@ -82,7 +79,7 @@ public class ExecutionManager {
 
     }
 
-    private CompletableFuture<Experiment> runHypermodelImpl(String hyperModelId,
+    private CompletableFuture<Experiment> runHypermodelImpl(RepositoryId hyperModelId,
                                                             String experiment_description,
                                                             String patient_pseudonym,
                                                             List<Input> inputs,
@@ -99,7 +96,7 @@ public class ExecutionManager {
                 .thenCompose(experiment -> this.submitWorkflow(hyperModelId, experiment, inputs,
                         modelRepoToken, expRepoToken, execToken));
     }
-    private CompletableFuture<Experiment> submitWorkflow(final String hyperModelId,
+    private CompletableFuture<Experiment> submitWorkflow(final RepositoryId hyperModelId,
                                                          final Experiment experiment,
                                                          final List<Input> inputs,
                                                          //final DBManager db,
@@ -138,7 +135,7 @@ public class ExecutionManager {
                     m.put("workflow_description", "Execution experiment: " + experimentId);
                     m.put("workflow_comment", "Invoked by HME©, all rights reserved :-)");
                     m.put("model_url", ModelRepository.fileUrl(t2FlowFileId));
-                    m.put("model_id", hyperModelId);
+                    m.put("model_id", hyperModelId.getId()+"");
                     m.put("inputset_url", ExperimentRepository.fileUrl(inputFileId));
                     m.put("experiment_id", experimentId);
                     m.put("experiment_uuid", experiment.uuid);
@@ -184,9 +181,9 @@ public class ExecutionManager {
     }
 
 
-    private CompletableFuture<List<Input>> getExecutionInputsImpl(final UUID experimentId,
-                                                                  final SAMLToken modelRepoToken,
-                                                                  final SAMLToken expRepoToken) {
+    private CompletableFuture<List<ModelParameter>> getExecutionInputsImpl(final UUID experimentId,
+                                                                           final SAMLToken modelRepoToken,
+                                                                           final SAMLToken expRepoToken) {
         final CompletableFuture<Experiment> expFut = expRepository.getExperiment(expRepoToken, experimentId);
         final CompletableFuture<ByteBuffer> byteBufferFut = expFut.thenCompose(experiment -> expRepository.getExperimentInputs(experiment, expRepoToken));
         final CompletableFuture<Model> modelFut = expFut.thenCompose(experiment -> modelRepository.getModel(experiment.trial.model_id, modelRepoToken));

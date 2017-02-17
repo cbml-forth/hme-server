@@ -18,6 +18,7 @@ CREATE TABLE hypermodel_versions (
    version_created TIMESTAMP WITH TIME ZONE DEFAULT now(), --timezone('UTC'::text, now()) NOT NULL,
    title text NOT NULL DEFAULT (''),
    description text NOT NULL DEFAULT (''),
+   strongly_coupled BOOLEAN DEFAULT (FALSE),
    svg_content text NOT NULL, -- svg content of the browser
    json_content text NOT NULL, -- JSON string in the joint.js format
    graph_content jsonb NOT NULL, -- JSON data, contains the graph in my own format
@@ -27,6 +28,29 @@ CREATE TABLE hypermodel_versions (
 );
 
 CREATE INDEX hypermodel_versions_hypermodel_uid ON hypermodel_versions(hypermodel_uid);
+
+CREATE TABLE published_versions (
+   hypermodel_uid UUID PRIMARY KEY,
+   hypermodel_version BIGINT NOT NULL,
+   repository_id INTEGER NOT NULL, -- The id in the Model Repository
+   xmml text NOT NULL, -- XMML description
+
+   CONSTRAINT published_versions_uid_fk FOREIGN KEY(hypermodel_uid)
+   REFERENCES hypermodels(hypermodel_uid) ON DELETE CASCADE ON UPDATE CASCADE,
+   CONSTRAINT published_versions_version_fk FOREIGN KEY(hypermodel_version)
+   REFERENCES hypermodel_versions(hypermodel_version) ON DELETE CASCADE ON UPDATE CASCADE
+);
+CREATE INDEX published_versions_hypermodel_version ON published_versions(hypermodel_version);
+
+
+CREATE TABLE events (
+  event_id BIGSERIAL PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  aggregate_type TEXT NOT NULL,
+  aggregate_uuid UUID NOT NULL, -- the UUID of the hypermodel (or model, depending on event_type)
+  data JSONB NOT NULL,
+  inserted_at TIMESTAMP(6) NOT NULL DEFAULT statement_timestamp()
+);
 
 
 --Some useful views:
@@ -43,15 +67,16 @@ GROUP BY hypermodel_uid;
 
 
 CREATE VIEW hypermodel_versions_vw AS
-SELECT H.user_id, H.hypermodel_uid,
-       V.hypermodel_version, V.frozen,
+SELECT H.user_id, H.hypermodel_uid, P.repository_id,
+       V.hypermodel_version, V.frozen, V.strongly_coupled,
        H.created,
        V.version_created, V.title, V.description,
        R.most_recent_version, R.last_update, R.versions, R.frozen_versions,
        V.json_content, V.svg_content,
        V.graph_content::text
 FROM hypermodels H JOIN hypermodel_versions V USING (hypermodel_uid)
-     JOIN recent_versions_vw R USING (hypermodel_uid);
+     JOIN recent_versions_vw R USING (hypermodel_uid)
+     LEFT OUTER JOIN published_versions P USING (hypermodel_uid);
 
 
 --------------- Keep the models used in each version in a separate TABLE

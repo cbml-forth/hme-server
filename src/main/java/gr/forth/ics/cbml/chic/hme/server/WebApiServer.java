@@ -19,6 +19,7 @@ import com.ning.http.client.*;
 import com.ning.http.client.multipart.ByteArrayPart;
 import com.ning.http.client.multipart.FilePart;
 import com.ning.http.client.multipart.StringPart;
+import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONAware;
 import net.minidev.json.parser.JSONParser;
 import net.minidev.json.parser.ParseException;
@@ -42,12 +43,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Created by ssfak on 26/12/15.
- */
+
+@Slf4j
 public class WebApiServer implements AutoCloseable {
     final AsyncHttpClient httpClient_;
-    private ExecutorService exec = Executors.newSingleThreadExecutor();
+    private ExecutorService exec = Executors.newFixedThreadPool(3);
 
     private final int max_req_in_flight;
     private final Semaphore req_in_flight;
@@ -117,7 +117,7 @@ public class WebApiServer implements AutoCloseable {
                             public void onThrowable(Throwable t) {
                                 req_in_flight.release();
 
-                                System.err.println("ERROR EX: " + t + " for " + request.getUrl());
+                                log.info("ERROR EX: {} for {}", t, request.getUrl());
                                 fut.completeExceptionally(t);
                             }
 
@@ -190,7 +190,7 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public void onThrowable(Throwable t) {
                                 req_in_flight.release();
-                                System.err.println("ERROR EX: " + t + " for " + request.getUrl());
+                                log.info("ERROR EX: {} for {}", t, request.getUrl());
                                 fut.completeExceptionally(t);
                                 self.total_req.incrementAndGet();
                                 self.failed_req.incrementAndGet();
@@ -200,7 +200,7 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public STATE onStatusReceived(HttpResponseStatus status) throws Exception {
                                 if (status.getStatusCode() / 100 != 2) {
-                                    System.err.println("ERROR: " + status.getStatusText() + " for " + request.getUrl());
+                                    log.info("ERROR: {} for {}", status.getStatusText(), request.getUrl());
                                     fut.completeExceptionally(new RuntimeException("API returned: " + status.getStatusText()));
                                     return STATE.ABORT;
                                 }
@@ -318,7 +318,7 @@ public class WebApiServer implements AutoCloseable {
                 public void onThrowable(Throwable t) {
                     req_in_flight.release();
 
-                    System.err.println("ERROR EX: " + t + " for " + request.getUrl());
+                    log.info("ERROR EX: {} for {}", t, request.getUrl());
                     emitter.onError(t);
                 }
 
@@ -326,9 +326,8 @@ public class WebApiServer implements AutoCloseable {
                 public Response onCompleted(Response response) throws Exception {
                     req_in_flight.release();
                     if (response.getStatusCode() / 100 != 2) {
-                        System.err.println(Thread.currentThread().getName() + ": ERROR: " + response.getStatusText() + " for " + request.getUrl()
-                                + " BODY: \n" + response.getResponseBody()
-                        );
+                        log.info("ERROR: {} for '{}' BODY:\n{}", response.getStatusText(), request.getUrl(),
+                                response.getResponseBody());
                         emitter.onError(new RuntimeException("API server returned: '" + response.getStatusText() + "'"));
                     } else {
                         //System.out.println("----> GOT " + response.getStatusText());
@@ -459,7 +458,7 @@ public class WebApiServer implements AutoCloseable {
                         @Override
                         public void onThrowable(Throwable t) {
                             req_in_flight.release();
-                            System.err.println("ERROR EX: " + t + " for " + request.getUrl());
+                            log.info("ERROR EX: {} for {}", t, request.getUrl());
                             fut.completeExceptionally(t);
                             self.total_req.incrementAndGet();
                             self.failed_req.incrementAndGet();
@@ -472,8 +471,9 @@ public class WebApiServer implements AutoCloseable {
                                 fut.completeExceptionally(new RuntimeException("Resource " + response.getUri() +
                                         " (method: " + request.getMethod() + ") not found?"));
                             else if (response.getStatusCode() / 100 != 2) {
-                                System.err.println("ERROR: " + response.getStatusText() + " for " + request.getUrl() + " ERROR: " + response.getResponseBody());
-                                fut.completeExceptionally(new RuntimeException("API server returned: '" + response.getResponseBody() + "'"));
+                                log.info("ERROR EX: {} for {} ERROR:\n{}", response.getStatusText(), request.getUrl(),
+                                        response.getResponseBody());
+                                fut.completeExceptionally(new RuntimeException("API server returned: " + response.getStatusCode()));
                             } else {
                                 //System.out.println("----> GOT " + response.getStatusText());
                                 //System.out.println(body);

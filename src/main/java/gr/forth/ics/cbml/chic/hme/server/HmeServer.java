@@ -18,8 +18,9 @@ package gr.forth.ics.cbml.chic.hme.server;
 import com.github.pgasync.ConnectionPoolBuilder;
 import com.github.pgasync.Db;
 import com.github.pgasync.Row;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.ModelRepository;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.SemanticStore;
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.*;
+import gr.forth.ics.cbml.chic.hme.server.mq.MessageQueueListener;
+import gr.forth.ics.cbml.chic.hme.server.mq.Observables;
 import gr.forth.ics.cbml.chic.hme.server.utils.DbUtils;
 import gr.forth.ics.cbml.chic.hme.server.utils.FileUtils;
 import io.undertow.Handlers;
@@ -32,11 +33,11 @@ import io.undertow.server.HttpServerExchange;
 import io.undertow.server.RoutingHandler;
 import io.undertow.server.handlers.PredicateHandler;
 import io.undertow.server.handlers.resource.*;
+import io.undertow.server.handlers.sse.ServerSentEventHandler;
 import io.undertow.server.session.InMemorySessionManager;
 import io.undertow.server.session.SessionAttachmentHandler;
 import io.undertow.server.session.SessionCookieConfig;
 import io.undertow.util.*;
-import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 import net.minidev.json.parser.JSONParser;
@@ -50,8 +51,11 @@ import org.pac4j.undertow.context.UndertowWebContext;
 import org.pac4j.undertow.handler.ApplicationLogoutHandler;
 import org.pac4j.undertow.handler.CallbackHandler;
 import org.pac4j.undertow.handler.SecurityHandler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -63,12 +67,14 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import static io.undertow.Handlers.routing;
 
-@Slf4j
 public class HmeServer {
+    private static final Logger log =
+            LoggerFactory.getLogger(HmeServer.class);
 
 
     private final static ExecutorService executorService = Executors.newFixedThreadPool(10);
@@ -338,20 +344,47 @@ public class HmeServer {
         int port = serverConfig.port();
 
         final Db database = init();
+        final TokenManager tokenManager = new TokenManager(serverConfig.secureTokenService(),
+                serverConfig.serviceAccountName(),
+                serverConfig.serviceAccountPassword());
 
 
-        final ModelRepository modelRepository = new ModelRepository(3);
+        final ModelRepository modelRepository = new ModelRepository(3, tokenManager);
         final String endpoint = config.sparqlRicordo();
-        log.info("RICORDO : " + endpoint);
+        log.info("RICORDO {} ", endpoint);
         final SemanticStore semanticStore = new SemanticStore(endpoint);
 
         final Config samlConfig = new SamlConfigFactory("https://ssfak.duckdns.org/hme2/").build();
 
-        final TokenManager tokenManager = new TokenManager(config.secureTokenService(), serverConfig.serviceAccountName(), serverConfig.serviceAccountPassword());
+        MessageQueueListener queueListener = new MessageQueueListener(serverConfig, database);
+        queueListener.connect(true);
+//        queueListener.observables()
+//                .modelMessages()
+//                .subscribe(message -> log.info("** {} ",message));
+//        queueListener.observables()
+//                .modelMessages()
+//                .subscribe(message -> log.info("// {} ",message));
+
+
         final RoutingHandler apiRoutes = routing(true)
                 .get("/preview/{uuid}/{version}",
                         exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
-                .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, tokenManager, database, modelRepository, semanticStore)))
+                .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, tokenManager,
+                        database, modelRepository, semanticStore)))
+                .get("/models/{id}", exchange -> exchange.dispatch(() ->
+                     getParam(exchange, "id")
+                             .map(Long::valueOf)
+                             .map(RepositoryId::new)
+                             .ifPresent(id -> modelRepository.getModel(id, "crafsrv")
+                                         .thenApply(Model::toJSON)
+                                         .whenComplete((js, throwable) -> {
+                                             if (throwable != null)
+                                                 sendException(exchange, throwable);
+                                             else {
+                                                 exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                                                 exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
+                                             }
+                                 }))))
 
                 .get("/hypermodels", exchange -> exchange.dispatch(() -> get_hypermodels(exchange, database)))
                 .post("/hypermodels", exchange -> exchange.dispatch(() -> save_hypermodel(exchange, database)))
@@ -359,8 +392,8 @@ public class HmeServer {
                         exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}", exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .put("/publishedhypermodels/{uuid}",
-                        exchange -> exchange.dispatch(() -> publish_hypermodel(exchange, tokenManager, database, modelRepository)))
-                .get("/transcode", HmeServer::transcode);
+                        exchange -> exchange.dispatch(() -> publish_hypermodel(exchange, database, modelRepository)))
+                .get("/sse", exchange -> exchange.dispatch(() -> monitor(exchange, queueListener.observables())));
 
         final HttpHandler corsHandler = new CORSHandler().wrap(apiRoutes);
 
@@ -434,32 +467,66 @@ public class HmeServer {
     }
 
     private static void publish_hypermodel(HttpServerExchange exchange,
-                                           TokenManager tokenManager,
                                            Db database,
                                            ModelRepository modelRepository)
     {
         final Optional<UUID> uuidOpt = getUuidParam(exchange, "uuid");
         if (!uuidOpt.isPresent()) {
-            sendError(exchange, "Hypermodel not found!", StatusCodes.NOT_FOUND);
+            sendNotFound(exchange, "Hypermodel not found!");
             return;
         }
-        final String user_id = userId(exchange);
+
+        exchange.startBlocking();
+
+        String workflowDescription;
+        Boolean isStronglyCoupled;
+        List<ModelParameter> inputs, outputs;
+        try {
+
+            JSONParser parser = new JSONParser(JSONParser.MODE_RFC4627);
+            final JSONObject o = (JSONObject) parser.parse(exchange.getInputStream());
+            workflowDescription = o.getAsString("xmml");
+            isStronglyCoupled = (Boolean) o.getOrDefault("isStronglyCoupled", Boolean.FALSE);
+            JSONArray ins = (JSONArray) o.get("inputs");
+            inputs = ins.stream().map(JSONObject.class::cast).map(ModelParameter::fromJson).collect(Collectors.toList());
+            JSONArray outs = (JSONArray) o.get("inputs");
+            outputs = outs.stream().map(JSONObject.class::cast).map(ModelParameter::fromJson).collect(Collectors.toList());
+        } catch (IOException | ParseException e) {
+            sendException(exchange, e);
+            return;
+        }
+        Optional<String> actAsOpt = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
+        if (!actAsOpt.isPresent()) {
+            sendError(exchange, "Not authenticated", StatusCodes.UNAUTHORIZED);
+            return;
+        }
+        final String actAs = actAsOpt.get();
+
 
         final UUID hypermodelUuid = uuidOpt.get();
-        db_get_hypermodel(database, hypermodelUuid, null, user_id)
+        db_get_hypermodel(database, hypermodelUuid, Optional.empty(), actAs)
                 .whenComplete((rs, throwable)-> {
                     if (throwable != null) {
                         sendException(exchange, throwable);
                         return;
                     }
                     if (!rs.isPresent()) {
-                        sendError(exchange, "hypermodel " + hypermodelUuid + " not found", StatusCodes.NOT_FOUND);
+                        sendNotFound(exchange, "hypermodel " + hypermodelUuid + " not found");
                         return;
                     }
                     final Hypermodel hm = rs.get();
-
-                    //modelRepository.storeModelAndWorkflow();
-                    return; //XXX
+                    modelRepository.storeHyperModel(hm, inputs, outputs, workflowDescription, actAs)
+                            .thenApply(model -> hm.withRepoId(model.getId()))
+                            .thenCompose(hypermodel -> db_publish_hypermodel(database, hypermodel, workflowDescription))
+                            .whenComplete((hypermodel, ex) -> {
+                                if (ex != null) {
+                                    sendException(exchange, ex);
+                                    return;
+                                }
+                                JSONObject js = hypermodel.toModel().toJSON();
+                                exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                                exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
+                            });
                 });
     }
 
@@ -517,7 +584,53 @@ public class HmeServer {
         return semanticStore.send_query_and_parse(q);
     }
 
-    private static void getAllModels(HttpServerExchange exchange, TokenManager tokMgr, Db db, ModelRepository modelRepository, SemanticStore semanticStore) {
+    private static void getAllModelsLocal(HttpServerExchange exchange, TokenManager tokMgr,
+                                     Db db, ModelRepository modelRepository,
+                                     SemanticStore semanticStore) {
+        System.err.println("-> getAllModels");
+
+        ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
+        ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.out::println);
+        Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
+        final CompletableFuture<List<Map<String, String>>> annotationsOfModels = // getAnnotationsOfModels(semanticStore);
+        CompletableFuture.completedFuture(Collections.emptyList());
+        tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
+                .thenApply(token -> {
+
+                    try (FileInputStream fis = new FileInputStream("/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme/resources/public/models.json")) {
+                        final JSONParser jsonParser = new JSONParser(JSONParser.MODE_RFC4627);
+                        final JSONArray objects = (JSONArray) jsonParser.parse(fis);
+
+                        return objects.stream()
+                                .map(JSONObject.class::cast)
+                                .map(json -> {
+                                    json.put("perspectives", new JSONObject());
+                                    json.put("uuid", UUID.randomUUID().toString());
+                                    return json;
+                                })
+                                .collect(Collectors.toList());
+
+                    } catch (IOException | ParseException e) {
+                        e.printStackTrace();
+                        return new JSONArray();
+                    }
+                })
+                .whenComplete((list, throwable) -> {
+
+                    if (throwable != null)
+                        sendException(exchange, throwable);
+                    else {
+                        exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                        final JSONArray objects = new JSONArray();
+                        objects.addAll(list);
+                        exchange.getResponseSender().send(objects.toJSONString(), IoCallback.END_EXCHANGE);
+                    }
+                });
+    }
+
+    private static void getAllModels(HttpServerExchange exchange, TokenManager tokMgr,
+                                     Db db, ModelRepository modelRepository,
+                                     SemanticStore semanticStore) {
         System.err.println("-> getAllModels");
 
         ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
@@ -576,7 +689,7 @@ public class HmeServer {
 
 
     private static String userId(final HttpServerExchange exchange) {
-        return "stelios"; // XXX
+        return "crafsrv"; // XXX
     }
 
     private static void get_hypermodels(final HttpServerExchange exchange, Db db) {
@@ -585,6 +698,7 @@ public class HmeServer {
         final String sql =
                 "SELECT * FROM hypermodel_versions_vw WHERE user_id=$1 AND hypermodel_version=most_recent_version";
 
+        final Consumer<Throwable> onError = throwable -> sendException(exchange, throwable);
         db.query(sql, Arrays.asList(user_id),
                 rs -> {
                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
@@ -601,9 +715,8 @@ public class HmeServer {
                     });
                     exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send(l.toJSONString(), IoCallback.END_EXCHANGE);
-
                 },
-                throwable -> sendException(exchange, throwable));
+                onError);
     }
 
     private static CompletableFuture<Optional<Hypermodel>> db_get_hypermodel(Db db,
@@ -648,9 +761,8 @@ public class HmeServer {
                     }
                     final Hypermodel hm = hmOpt.get();
 
-                    final Long version = hm.version;
-                    final Instant last_update = hm.updatedAt;
-//                    final Date gmtDate = Date.from(last_update.toInstant(ZoneOffset.UTC));
+                    final Long version = hm.getVersion();
+                    final Instant last_update = hm.getUpdatedAt();
                     String etag = String.format("%d", version);
                     final ETag eTag = new ETag(false, etag);
 
@@ -673,7 +785,21 @@ public class HmeServer {
 
                 });
     }
+    private static CompletableFuture<Hypermodel> db_publish_hypermodel(Db db,
+                                                                 Hypermodel hm,
+                                                                 String workflowDescription)
+    {
+        assert hm.getPublishedRepoId().isPresent();
 
+        final Long repoID = hm.getPublishedRepoId().get().getId();
+        return DbUtils.queryOneDb(db,
+                "INSERT INTO published_versions(hypermodel_uid,hypermodel_version,repository_id,xmml)" +
+                        " VALUES($1,$2,$3,$4)" +
+                        " ON CONFLICT (hypermodel_uid) DO UPDATE SET hypermodel_version=$2, repository_id=$3, xmml=$4" +
+                        " RETURNING hypermodel_version",
+                Arrays.asList(hm.getUuid(), hm.getVersion(), repoID, workflowDescription))
+                .thenApply(row -> hm);
+    }
 
     private static Path previewPathFor(final UUID hypermodel_uid, long version)
     {
@@ -767,7 +893,10 @@ public class HmeServer {
     }
 
     static void sendException(final HttpServerExchange exchange, final Throwable throwable) {
-        sendException(exchange, throwable, StatusCodes.INTERNAL_SERVER_ERROR);
+        if (throwable.getCause() != null)
+            sendException(exchange, throwable.getCause());
+        else
+            sendException(exchange, throwable, StatusCodes.INTERNAL_SERVER_ERROR);
     }
 
     static void sendException(final HttpServerExchange exchange, final Throwable throwable, int code) {
@@ -775,6 +904,9 @@ public class HmeServer {
         sendError(exchange, throwable.getMessage(), code);
     }
 
+    static void sendNotFound(final HttpServerExchange exchange, final String msg) {
+        sendError(exchange, msg, StatusCodes.NOT_FOUND);
+    }
     static void sendError(final HttpServerExchange exchange, final String msg, int code) {
         /*
         // Send an Error response according to https://tools.ietf.org/html/rfc7807
@@ -803,7 +935,6 @@ public class HmeServer {
         final String sql = "select model_uuid, count(*)::int4" +
                 " FROM hypermodel_versions_models JOIN recent_versions_vw USING (hypermodel_uid)" +
                 " WHERE hypermodel_version = most_recent_version GROUP BY model_uuid";
-        System.err.println("** counting...");
         return DbUtils.queryDb(db, sql)
                 .thenApply(rs -> {
                     final HashMap<UUID, Integer> map = new HashMap<>();
@@ -829,6 +960,7 @@ public class HmeServer {
     private static void save_hypermodel(final HttpServerExchange exchange, Db db) {
 
         final String user_id = userId(exchange);
+        final Consumer<Throwable> onError = throwable -> sendException(exchange, throwable);
         exchange.startBlocking();
         try {
             JSONParser parser = new JSONParser(JSONParser.MODE_RFC4627);
@@ -839,6 +971,7 @@ public class HmeServer {
             final String canvas = o.getAsString("canvas");
             final String svgContent = o.getOrDefault("svg_content", "").toString();
             final JSONObject graph = (JSONObject) o.get("graph");
+            final boolean isStronglyCoupled = (Boolean) o.getOrDefault("isStronglyCoupled", Boolean.TRUE);
 
             // System.err.println("GOT : " + o.toJSONString());
 
@@ -859,10 +992,10 @@ public class HmeServer {
 
                         if (rs.size() == 0 || ETagUtils.handleIfMatch(exchange, eTag, eTag.isWeak())) {
                             db.query(
-                                    "INSERT INTO hypermodel_versions(hypermodel_uid, title, description, svg_content, json_content, graph_content, frozen)" +
-                                            " VALUES($1, $2, $3, $4, $5, $6, $7)" +
+                                    "INSERT INTO hypermodel_versions(hypermodel_uid, title, description, svg_content, json_content, graph_content, frozen, strongly_coupled)" +
+                                            " VALUES($1, $2, $3, $4, $5, $6, $7, $8)" +
                                             " RETURNING hypermodel_version",
-                                    Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen),
+                                    Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen, isStronglyCoupled),
                                     rs1 -> {
                                         final Long version = rs1.row(0).getLong(0);
                                         final ETag eTag2 = hypermodelEtag(version);
@@ -903,7 +1036,7 @@ public class HmeServer {
 
 
                                     },
-                                    ex -> sendException(exchange, ex)
+                                    onError
                             );
                         } else {
                             exchange.setStatusCode(StatusCodes.PRECONDITION_FAILED);
@@ -914,11 +1047,10 @@ public class HmeServer {
 
                         }
                     },
-                    throwable -> sendException(exchange, throwable));
+                    onError);
 
         } catch (Exception e) {
-            e.printStackTrace();
-            sendException(exchange, e);
+            onError.accept(e);
         }
 
     }
@@ -936,6 +1068,7 @@ public class HmeServer {
         final String hypermodel_uid = row.getString("hypermodel_uid");
         final Long version = row.getLong("hypermodel_version");
         final Boolean frozen = row.getBoolean("frozen");
+        final Boolean isStronglyCoupled = row.getBoolean("strongly_coupled");
         final String title = row.getString("title");
         final String description = row.getString("description");
         // final String canvas = row.getString("json_content");
@@ -944,6 +1077,7 @@ public class HmeServer {
         final Timestamp updated = row.getTimestamp("version_created");
 
         final Long[] versions = row.getArray("versions", Long[].class);
+        final Optional<RepositoryId> repository_id = Optional.ofNullable(row.getLong("repository_id")).map(RepositoryId::new);
 
         JSONObject graphJson = new JSONObject();
         try {
@@ -955,13 +1089,32 @@ public class HmeServer {
                 .uuid(UUID.fromString(hypermodel_uid))
                 .version(version)
                 .isFrozen(frozen)
+                .isStronglyCoupled(isStronglyCoupled)
                 .name(title)
                 .description(description)
                 .createdAt(created.toInstant())
                 .updatedAt(updated.toInstant())
                 .graph(graphJson)
                 .allVersions(Arrays.asList(versions))
+                .publishedRepoId(repository_id)
                 .build();
         return hm;
+    }
+
+
+
+    static void monitor(HttpServerExchange exchange, Observables observables) {
+        final String userId = userId(exchange);
+        System.out.printf("[%s] monitor_experiment\n", userId);
+        try {
+            exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");
+            // For proxying by nginx (https://www.nginx.com/resources/wiki/start/topics/examples/x-accel/#x-accel-buffering):
+            exchange.getResponseHeaders().put(HttpString.tryFromString("X-Accel-Buffering"), "no");
+            new ServerSentEventHandler(new MonitorConnectionHandler(userId, observables.executionMessages()))
+                    .handleRequest(exchange);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
     }
 }

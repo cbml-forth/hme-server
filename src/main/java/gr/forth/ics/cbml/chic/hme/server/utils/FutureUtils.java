@@ -17,6 +17,7 @@ package gr.forth.ics.cbml.chic.hme.server.utils;
 
 import lombok.experimental.UtilityClass;
 import rx.Observable;
+import rx.Single;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,7 +42,7 @@ public class FutureUtils {
         return future;
     }
 
-    public static <T> rx.Observable<T> futureToObservable(CompletableFuture<T> fut) {
+    public static <T> Observable<T> futureToObservable(CompletableFuture<T> fut) {
         return Observable.create(subscriber ->
                 fut.whenComplete((result, error) -> {
                     if (error != null) {
@@ -52,6 +53,16 @@ public class FutureUtils {
                     }
                 }));
 
+    }
+    public static <T> Single<T> futureToSingle(CompletableFuture<T> future) {
+        return Single.create(subscriber ->
+                future.whenComplete((result, error) -> {
+                    if (error != null) {
+                        subscriber.onError(error);
+                    } else {
+                        subscriber.onSuccess(result);
+                    }
+                }));
     }
 
     public static <T> CompletableFuture<List<T>> sequence(List<CompletableFuture<T>> futures) {

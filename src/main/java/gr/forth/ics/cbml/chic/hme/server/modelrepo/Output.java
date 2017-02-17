@@ -35,6 +35,7 @@ public class Output {
     String unit;
     String range;
     @Wither String value;
+    
 
     public static Output fromJson(JSONObject jsonObject) {
 
