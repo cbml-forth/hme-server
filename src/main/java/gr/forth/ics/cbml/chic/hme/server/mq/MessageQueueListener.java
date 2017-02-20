@@ -31,6 +31,8 @@ public class MessageQueueListener implements AutoCloseable{
     private static final String vphhfExchangeName = "vphhf";
     private static final String mrExchangeName = "mr";
 
+    private static final int prefetchCount = 20;
+
     private final Db database;
 
     private final ConnectionFactory factory;
@@ -149,6 +151,11 @@ public class MessageQueueListener implements AutoCloseable{
                             e.getReason().protocolMethodName()));
 
             final Channel channel = conn.createChannel();
+            // Specify the maximum number of messages that the server will deliver
+            // before requiring acknowledgements. This allow us to have control on the
+            // concurrency (the maximum number of concurrent messages that the RabbitMQ server
+            // will send us) and therefore it's a basic support for 'back-pressure'.
+            channel.basicQos(prefetchCount);
 
             channel.exchangeDeclare(vphhfExchangeName, "topic", true);
             channel.exchangeDeclare(mrExchangeName, "topic", true);
