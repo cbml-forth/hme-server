@@ -46,7 +46,7 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
                 .observeOn(Schedulers.io())
                 .subscribe(jsonObject -> {
                             log.info("SSE: {}", jsonObject);
-                            sseConn.send(jsonObject.toJSONString());
+                            sseConn.send(jsonObject.toJSONString(), "execution", jsonObject.getAsString("id"), null);
                         },
                         ex -> IoUtils.safeClose(sseConn));
     }
