@@ -83,6 +83,9 @@ public class MessageQueueListener implements AutoCloseable{
                                    AMQP.BasicProperties properties,
                                    byte[] body)
                 throws IOException {
+
+            final Channel myChannel = this.getChannel();
+
             final String routingKey = envelope.getRoutingKey();
             final String message = new String(body, StandardCharsets.UTF_8);
 
@@ -96,18 +99,39 @@ public class MessageQueueListener implements AutoCloseable{
             if (event.isPresent())
                 this.saveMessage(event.get())
                         .whenComplete(((msg, throwable) -> {
-                            boolean failed = throwable != null;
-                            // When the Event/Message has been safely handled
-                            // acknowledge its receipt...
-                            basicAck(failed, deliveryTag, this.getChannel());
-                            if (failed)
-                                log.info("storing event in DB", throwable);
-                            else
-                                this.publisher.publish(msg);
+                            boolean requeue = true;
+                            boolean multipleAck = false;
+                            boolean msgSavedOk = throwable == null;
+
+                            // This can be handled in a different thread than the one of
+                            // the Consumer. Is that a problem?
+                            //
+                            // According to
+                            // http://stackoverflow.com/questions/30695375/rabbitmq-and-channels-java-thread-safety
+                            // it's not:
+                            //
+                            // "consuming (basicConsume) and acking from more than one thread is a common
+                            // rabbitmq pattern that is already used by the java client."
+
+                            try {
+                                if (msgSavedOk) {
+                                    // When the Event/Message has been safely handled
+                                    // acknowledge its receipt...
+                                    myChannel.basicAck(deliveryTag, multipleAck);
+                                    this.publisher.publish(msg);
+                                }
+                                else {
+                                    // We couldn't store the Event in the Database!
+                                    myChannel.basicNack(deliveryTag, multipleAck, requeue);
+                                    log.info("storing event in DB", throwable);
+                                }
+                            } catch (IOException e) {
+                                log.debug("basicAck", e);
+                            }
                         }));
             else {
                 log.info("Unknown message type! Routing key='{}', body='{}'", routingKey, message);
-                basicAck(true, deliveryTag, this.getChannel()); // Acknowledge receipt?!
+                myChannel.basicReject(deliveryTag, /* requeue */ false);
             }
 
         }
@@ -239,15 +263,6 @@ public class MessageQueueListener implements AutoCloseable{
     }
         */
 
-
-
-    private static void basicAck(boolean accepted, long deliveryTag, final Channel channel) {
-        try {
-            channel.basicAck(deliveryTag, accepted);
-        } catch (IOException e) {
-            log.info("basicAck",e);
-        }
-    }
 
     @Override
     public void close() {

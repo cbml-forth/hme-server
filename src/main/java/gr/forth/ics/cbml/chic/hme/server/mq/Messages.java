@@ -18,7 +18,6 @@ public class Messages {
 
 
     private static final Pattern experimentStatusPattern = Pattern.compile("^workflow\\.([a-f0-9-]+)\\.status");
-    private static final Pattern modelsStatusPattern = Pattern.compile("^models\\.([^.]+)(\\..+)?");
 
     @Value
     @EqualsAndHashCode(callSuper=false)
@@ -124,7 +123,6 @@ public class Messages {
         return null;
     }
     static private Messages.ModelsChangedMessage toModelsChange(final String subject, final String message) {
-        Matcher matcher = modelsStatusPattern.matcher(subject);
 
         /*
 
@@ -138,43 +136,45 @@ public class Messages {
 | Deletion of model/tool                              | models.deleted              | uuid of the model that has been deleted          |
 
          */
-        if (matcher.matches()) {
-            // The body of the message always contains the UUID of the affected model
-            final UUID modelUUID = UUID.fromString(message);
 
             ModelsChangedMessage.Type type;
             ModelsChangedMessage.Change what;
-            if ("models.new".equalsIgnoreCase(subject)) {
-                type = ModelsChangedMessage.Type.NEW;
-                what = ModelsChangedMessage.Change.NO_CHANGE;
-            }
-            else if ("models.deleted".equalsIgnoreCase(subject)) {
-                type = ModelsChangedMessage.Type.DELETED;
-                what = ModelsChangedMessage.Change.NO_CHANGE;
-            }
-            else {
-                type = ModelsChangedMessage.Type.CHANGED;
-                if ("models.changed.parameters".equalsIgnoreCase(subject))
-                    what = ModelsChangedMessage.Change.PARAMETERS;
-                else if ("models.changed.files".equalsIgnoreCase(subject))
-                    what = ModelsChangedMessage.Change.FILES;
-                else if ("models.changed.perspectives".equalsIgnoreCase(subject))
-                    what = ModelsChangedMessage.Change.PERSPECTIVES;
-                else if ("models.changed.references".equalsIgnoreCase(subject))
-                    what = ModelsChangedMessage.Change.REFERENCES;
-                else if ("models.changed".equalsIgnoreCase(subject))
+            switch (subject) {
+                case "models.new":
+                    type = ModelsChangedMessage.Type.NEW;
+                    what = ModelsChangedMessage.Change.NO_CHANGE;
+                    break;
+                case "models.deleted":
+                    type = ModelsChangedMessage.Type.DELETED;
+                    what = ModelsChangedMessage.Change.NO_CHANGE;
+                    break;
+                case "models.changed":
+                    type = ModelsChangedMessage.Type.CHANGED;
                     what = ModelsChangedMessage.Change.BASIC;
-                else {
-                    log.info("Unknown subject: '{}'", subject);
+                    break;
+                case "models.changed.parameters":
+                    type = ModelsChangedMessage.Type.CHANGED;
+                    what = ModelsChangedMessage.Change.PARAMETERS;
+                    break;
+                case "models.changed.files":
+                    type = ModelsChangedMessage.Type.CHANGED;
+                    what = ModelsChangedMessage.Change.FILES;
+                    break;
+                case "models.changed.perspectives":
+                    type = ModelsChangedMessage.Type.CHANGED;
+                    what = ModelsChangedMessage.Change.PERSPECTIVES;
+                    break;
+                case "models.changed.references":
+                    type = ModelsChangedMessage.Type.CHANGED;
+                    what = ModelsChangedMessage.Change.REFERENCES;
+                    break;
+                default:
                     return null;
-                }
-
             }
-
+            // The body of the message always contains the UUID of the affected model
+            final UUID modelUUID = UUID.fromString(message);
             return new Messages.ModelsChangedMessage(modelUUID, type, what);
 
-        }
-        return null;
     }
 
 

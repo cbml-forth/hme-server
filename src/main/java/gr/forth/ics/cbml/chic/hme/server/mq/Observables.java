@@ -33,7 +33,7 @@ public class Observables implements AutoCloseable{
         observable.connect();
     }
 
-    public void publish(Messages.Message msg)
+    void publish(Messages.Message msg)
     {
         this.publisher.onNext(msg);
     }

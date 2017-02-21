@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Slf4j
 public class WebApiServer implements AutoCloseable {
     final AsyncHttpClient httpClient_;
-    private ExecutorService exec = Executors.newFixedThreadPool(3);
+    private ExecutorService exec = Executors.newSingleThreadExecutor();
 
     private final int max_req_in_flight;
     private final Semaphore req_in_flight;
