@@ -21,7 +21,6 @@ import nu.xom.*;
 import javax.xml.bind.DatatypeConverter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -39,12 +38,8 @@ public class SAMLToken {
     private Map<String, String> assertions;
 
     private String httpSamlToken;
-
-    public Instant getExpirationDate() {
-        return expirationDate;
-    }
-
-    private Instant expirationDate;
+    private Instant notOnOrAfter;
+    private Instant notBefore;
 
     public static final XPathContext xPathContext = new XPathContext();
 
@@ -142,7 +137,8 @@ public class SAMLToken {
     }
 
     public boolean isValid() {
-        return Instant.now().isBefore(this.getExpirationDate());
+        final Instant now = Instant.now();
+        return now.isAfter(this.notBefore) && now.isBefore(this.notOnOrAfter);
     }
     public String getHttpSamlToken() {
         return httpSamlToken;
@@ -171,12 +167,21 @@ public class SAMLToken {
                 assertions.put(name, value);
             }
 
-            final Nodes dateConditions = assertion.query("//saml:Conditions[@NotOnOrAfter]", xPathContext);
+            final Nodes dateConditions = assertion.query("//saml:Conditions[@NotOnOrAfter or @NotBefore]", xPathContext);
             for (int j = 0; j < dateConditions.size(); j++) {
                 final Element condition = (Element) dateConditions.get(i);
-                final Instant notOnOrAfter = DatatypeConverter.parseDateTime(condition.getAttribute("NotOnOrAfter").getValue()).toInstant();
-                if (this.expirationDate == null || this.expirationDate.isAfter(notOnOrAfter))
-                    this.expirationDate = notOnOrAfter;
+                final Attribute notOnOrAfterAttr = condition.getAttribute("NotOnOrAfter");
+                if (notOnOrAfterAttr != null) {
+                    final Instant notOnOrAfterVal = DatatypeConverter.parseDateTime(notOnOrAfterAttr.getValue()).toInstant();
+                    if (this.notOnOrAfter == null || this.notOnOrAfter.isAfter(notOnOrAfterVal))
+                        this.notOnOrAfter = notOnOrAfterVal;
+                }
+                final Attribute notBeforeAttr = condition.getAttribute("NotBefore");
+                if (notBeforeAttr != null) {
+                    final Instant notBeforeVal = DatatypeConverter.parseDateTime(notBeforeAttr.getValue()).toInstant();
+                    if (this.notBefore == null || notBeforeVal.isAfter(this.notBefore))
+                        this.notBefore = notBeforeVal;
+                }
             }
         }
         this.assertions = assertions;
@@ -187,4 +192,19 @@ public class SAMLToken {
             return assertions.get("urn:custodix:ciam:1.0:principal:uuid");
         return assertions.getOrDefault("urn:oid:0.9.2342.19200300.100.1.1", "");
     }
+
+
+    public Instant getExpirationDate() {
+        return notOnOrAfter;
+    }
+    public Instant getStartDate() {
+        return notBefore;
+    }
+
+    @Override
+    public String toString() {
+        return String.format("<SAMLToken user=%s notBefore=%s notAfter=%s>",
+                getUserId(), this.notBefore, this.notOnOrAfter);
+    }
+
 }
