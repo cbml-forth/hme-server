@@ -3,7 +3,9 @@ package gr.forth.ics.cbml.chic.hme.server;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import lombok.extern.slf4j.Slf4j;
 
+import java.net.URI;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -12,6 +14,7 @@ import java.util.concurrent.TimeUnit;
 /**
  * Created by ssfak on 21/4/16.
  */
+@Slf4j
 public class TokenManager {
 
     private final SAMLLogin samlLogin;
@@ -26,6 +29,7 @@ public class TokenManager {
         this.serviceAccount = account_name;
         this.servicePassword = pass;
 
+        log.info("Initializing.. STS={}, account={}", secureTokenService, account_name);
         tokens = Caffeine.newBuilder()
                 .maximumSize(4 * 1_000)
                 .expireAfterWrite(2, TimeUnit.HOURS)
@@ -44,6 +48,9 @@ public class TokenManager {
     }
 
 
+    public CompletableFuture<SAMLToken> getDelegationToken(final URI audience, final String actAsUser) {
+        return this.getDelegationToken(audience.toString(), actAsUser);
+    }
     public CompletableFuture<SAMLToken> getDelegationToken(final String audience, final String actAsUser) {
 
         // Try to find whether we have a _valid_ delegated token
@@ -60,12 +67,9 @@ public class TokenManager {
         return this.samlLogin
                 .createDelegatedToken(this.serviceAccount, this.servicePassword, audience, actAsUser)
                 .whenComplete((samlToken, throwable) -> {
-                    if (throwable != null) {
-                        System.err.printf("** GET DELEGATION TOKEN exception '%s', cause %s\n", throwable.getMessage(), throwable.getCause().getMessage());
-                    }
-                    else {
+                    if (throwable == null) {
                         // Update the Cache:
-                        System.err.printf("** Got delegation token for user %s to access %s [time=%s]\n", actAsUser, audience, Instant.now().toString());
+                        log.info("Got delegation token for user {} to access {}", actAsUser, audience);
                         this.tokens.put(cacheKey(actAsUser, audience), samlToken);
                     }
                 });

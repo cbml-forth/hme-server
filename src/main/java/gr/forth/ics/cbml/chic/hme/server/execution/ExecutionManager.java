@@ -5,6 +5,7 @@ import gr.forth.ics.cbml.chic.hme.server.TokenManager;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.*;
 import gr.forth.ics.cbml.chic.hme.server.utils.FutureUtils;
 import gr.forth.ics.cbml.chic.hme.server.utils.ZipUtils;
+import lombok.extern.slf4j.Slf4j;
 import nu.xom.*;
 
 import java.io.ByteArrayInputStream;
@@ -24,6 +25,7 @@ import java.util.stream.Collectors;
 /**
  * Created by ssfak on 31/1/17.
  */
+@Slf4j
 public class ExecutionManager {
 
     final TokenManager tokenManager;
@@ -33,7 +35,7 @@ public class ExecutionManager {
 
     final Path storageDir;
 
-    ExecutionManager(final Path storageDir, TokenManager tokenManager,
+    public ExecutionManager(final Path storageDir, TokenManager tokenManager,
                      ExperimentRepository expRepository, ModelRepository modelRepository,
                      ExecutionFramework execFramework) {
         this.tokenManager = tokenManager;
@@ -46,7 +48,7 @@ public class ExecutionManager {
     public CompletableFuture<Experiment> runHypermodel(final RepositoryId hyperModelId,
                                                        final String experiment_description,
                                                        final String patient_pseudonym,
-                                                       final List<Input> inputs,
+                                                       final List<ModelParameter> inputs,
                                                        // final DBManager db,
                                                        final String actAs) {
         final CompletableFuture<SAMLToken> expRepoTokenFut = tokenManager.getDelegationToken(expRepository.AUDIENCE, actAs);
@@ -82,7 +84,7 @@ public class ExecutionManager {
     private CompletableFuture<Experiment> runHypermodelImpl(RepositoryId hyperModelId,
                                                             String experiment_description,
                                                             String patient_pseudonym,
-                                                            List<Input> inputs,
+                                                            List<ModelParameter> inputs,
                                                             SAMLToken modelRepoToken,
                                                             SAMLToken expRepoToken,
                                                             SAMLToken execToken) {
@@ -98,7 +100,7 @@ public class ExecutionManager {
     }
     private CompletableFuture<Experiment> submitWorkflow(final RepositoryId hyperModelId,
                                                          final Experiment experiment,
-                                                         final List<Input> inputs,
+                                                         final List<ModelParameter> inputs,
                                                          //final DBManager db,
                                                          final SAMLToken modelRepoToken,
                                                          final SAMLToken expRepoToken,
@@ -115,11 +117,13 @@ public class ExecutionManager {
                         if ("t2flow".equalsIgnoreCase(kind) || "xmml".equalsIgnoreCase(kind))
                             return f.getId();
                     }
+                    log.error("No workflow file (xmml or t2flow) found for {}", hyperModelId);
                     throw new IndexOutOfBoundsException("t2Flow (or xmml) file not found for model " + hyperModelId); //list.get(0).getId();
                 });
 
         // 2. Upload the Inputs in 'Baclava' format to the trial repository:
         final String baclava = execFramework.createInputFile(inputs);
+        log.info("BACLAVA: {}", baclava);
         final CompletableFuture<String> inputFileFut =
                 expRepository.addFileToSubject(experiment.getSubjectIn().getId(), "inputs", "baclava",
                         ByteBuffer.wrap(baclava.getBytes(StandardCharsets.UTF_8)), expRepoToken);
@@ -127,24 +131,27 @@ public class ExecutionManager {
         // 3. Submit the "workflow" to the ExecutionFramework
         return FutureUtils.thenComposeBoth(inputFileFut, t2FlowFileFut,
                 (inputFileId, t2FlowFileId) -> {
-                    final String experimentId = experiment.id;
+                    final RepositoryId experimentId = experiment.id;
                     final String subject_out_id = experiment.getSubjectOut().getId();
 
                     HashMap<String, String> m = new HashMap<>();
                     m.put("workflow_title", experiment.description == null ? "Experiment" : experiment.description);
                     m.put("workflow_description", "Execution experiment: " + experimentId);
                     m.put("workflow_comment", "Invoked by HME©, all rights reserved :-)");
-                    m.put("model_url", ModelRepository.fileUrl(t2FlowFileId));
+                    m.put("model_url", modelRepository.fileUrl(t2FlowFileId));
                     m.put("model_id", hyperModelId.getId()+"");
-                    m.put("inputset_url", ExperimentRepository.fileUrl(inputFileId));
-                    m.put("experiment_id", experimentId);
+                    m.put("inputset_url", expRepository.fileUrl(inputFileId));
+                    m.put("experiment_id", experimentId.toString());
                     m.put("experiment_uuid", experiment.uuid);
                     m.put("subject_out_id", subject_out_id);
-                    System.err.println("READY TO send to DIRECTOR...");
+                    log.info("Ready to send to VPH-HF Director... experiment id={}",experimentId);
                     return execFramework.submitWorkflow(m, execToken);
                 })
                 // 4. Start the workflow
-                .thenCompose(workflowStatus -> execFramework.startWorkflow(workflowStatus, execToken))
+                .thenCompose(workflowStatus -> {
+                    log.info("Starting workflow {} for exp {}", workflowStatus.getWorkflowId(), experiment.id);
+                    return execFramework.startWorkflow(workflowStatus, execToken);
+                })
                 .thenApply(workflowStatus -> {
                     experiment.workflow_uuid = workflowStatus.getWorkflowUuid();
                     experiment.status = Experiment.EXP_RUN_STATE.fromString(workflowStatus.getStatus()); //XXX: Check with Simone!!

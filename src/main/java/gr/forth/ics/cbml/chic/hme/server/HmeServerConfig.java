@@ -18,6 +18,8 @@ package gr.forth.ics.cbml.chic.hme.server;
 import org.aeonbits.owner.Accessible;
 import org.aeonbits.owner.Config;
 
+import java.net.URI;
+
 /**
  * Created by ssfak on 7/4/16.
  */
@@ -43,8 +45,17 @@ public interface HmeServerConfig extends Config, Accessible {
     @DefaultValue("https://hme.chic-vph.eu/hme")
     String serviceUrl();
 
-    @DefaultValue("https://mr.chic-vph.eu/")
-    String mrServiceUrl();
+    @DefaultValue("https://cdr.chic-vph.eu/")
+    URI cdrServiceUrl();
+
+    @DefaultValue("https://hf.chic-vph.eu/api/")
+    URI hfServiceUrl();
+
+    @DefaultValue("https://mr.chic-vph.eu/model_app/")
+    URI mrServiceUrl();
+
+    @DefaultValue("https://istr.chic-vph.eu/api/")
+    URI istrServiceUrl();
 
     @DefaultValue("60")
     int maxSessionInactivity();
@@ -86,4 +97,18 @@ public interface HmeServerConfig extends Config, Accessible {
     @Key("rabbimq.threads")
     @DefaultValue("3")
     int amqpThreadsNbr();
+
+
+    @Key("keystore.path")
+    String keystorePath();
+
+    @Key("keystore.password")
+    String keystorePassword();
+
+    @Key("keystore.privateKeyPassword")
+    String privateKeyPassword();
+
+    @Key("identityProviderMetadataPath")
+    String identityProviderMetadataPath();
+
 }

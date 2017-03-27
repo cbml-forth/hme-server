@@ -18,6 +18,10 @@ package gr.forth.ics.cbml.chic.hme.server;
 import com.github.pgasync.ConnectionPoolBuilder;
 import com.github.pgasync.Db;
 import com.github.pgasync.Row;
+import gr.forth.ics.cbml.chic.hme.server.execution.ExecutionFramework;
+import gr.forth.ics.cbml.chic.hme.server.execution.ExecutionManager;
+import gr.forth.ics.cbml.chic.hme.server.execution.Experiment;
+import gr.forth.ics.cbml.chic.hme.server.execution.ExperimentRepository;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.*;
 import gr.forth.ics.cbml.chic.hme.server.mq.MessageQueueListener;
 import gr.forth.ics.cbml.chic.hme.server.mq.Observables;
@@ -26,6 +30,8 @@ import gr.forth.ics.cbml.chic.hme.server.utils.FileUtils;
 import io.undertow.Handlers;
 import io.undertow.Undertow;
 import io.undertow.io.IoCallback;
+import io.undertow.predicate.Predicate;
+import io.undertow.predicate.Predicates;
 import io.undertow.security.api.SecurityContext;
 import io.undertow.security.idm.Account;
 import io.undertow.server.HttpHandler;
@@ -43,6 +49,7 @@ import net.minidev.json.JSONObject;
 import net.minidev.json.parser.JSONParser;
 import net.minidev.json.parser.ParseException;
 import org.aeonbits.owner.ConfigFactory;
+import org.jooq.lambda.tuple.Tuple;
 import org.pac4j.core.config.Config;
 import org.pac4j.saml.client.SAML2Client;
 import org.pac4j.saml.metadata.SAML2MetadataResolver;
@@ -226,7 +233,7 @@ public class HmeServer {
             if (queryParameters.containsKey("h"))
                 height = Integer.parseInt(queryParameters.get("h").getFirst());
 
-            int quality = 99; // 0 - 100
+            int quality = 100; // 0 - 100
             if (queryParameters.containsKey("q"))
                 quality = Integer.parseInt(queryParameters.get("q").getFirst());
 
@@ -349,12 +356,19 @@ public class HmeServer {
                 serverConfig.serviceAccountPassword());
 
 
-        final ModelRepository modelRepository = new ModelRepository(3, tokenManager);
+        final ModelRepository modelRepository = new ModelRepository(serverConfig.mrServiceUrl(), 3, tokenManager);
+        final ExecutionFramework executionFramework = new ExecutionFramework(serverConfig.hfServiceUrl(), 3);
+        final ExperimentRepository experimentRepository = new ExperimentRepository(serverConfig.istrServiceUrl(), 3);
+        final ExecutionManager executionManager = new ExecutionManager(Files.createTempDirectory(""), tokenManager,
+                experimentRepository, modelRepository, executionFramework);
+
         final String endpoint = config.sparqlRicordo();
         log.info("RICORDO {} ", endpoint);
         final SemanticStore semanticStore = new SemanticStore(endpoint);
 
-        final Config samlConfig = new SamlConfigFactory("https://ssfak.duckdns.org/hme2/").build();
+        final Config samlConfig = new SamlConfigFactory("https://ssfak.duckdns.org/hme2/",
+                config.keystorePath(), config.keystorePassword(),
+                config.privateKeyPassword(), config.identityProviderMetadataPath()).build();
 
         MessageQueueListener queueListener = new MessageQueueListener(serverConfig, database);
         queueListener.connect(true);
@@ -367,8 +381,6 @@ public class HmeServer {
 
 
         final RoutingHandler apiRoutes = routing(true)
-                .get("/preview/{uuid}/{version}",
-                        exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
                 .get("/models", exchange -> exchange.dispatch(() -> getAllModels(exchange, tokenManager,
                         database, modelRepository, semanticStore)))
                 .get("/models/{id}", exchange -> exchange.dispatch(() ->
@@ -392,10 +404,17 @@ public class HmeServer {
                         exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}", exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .put("/publishedhypermodels/{uuid}",
-                        exchange -> exchange.dispatch(() -> publish_hypermodel(exchange, database, modelRepository)))
-                .get("/sse", exchange -> exchange.dispatch(() -> monitor(exchange, queueListener.observables())));
+                        exchange -> exchange.dispatch(() -> publishHypermodelAndRun(exchange, database, modelRepository, executionManager)));
 
-        final HttpHandler corsHandler = new CORSHandler().wrap(apiRoutes);
+        // The Api Routes are validated against an authenticated user and
+        // that includes an "X-Requested-By" header. The latter is easy way to
+        // mitigate CSRF attacks for REST services.
+        // See OWASP guidelines at https://goo.gl/R0csc3
+        final Predicate authnPredicate = ChicAccount.authnPredicate();
+        final Predicate xhrRequestPredicate = (HttpServerExchange e) -> e.getRequestHeaders().contains("X-Requested-By");
+        final Predicate apiRoutesPredicate = Predicates.and(authnPredicate, xhrRequestPredicate);
+
+        //final HttpHandler corsHandler = new CORSHandler().wrap(apiRoutes);
 
         final String editorUrl = BASE_PATH + "/static/html/";
         final HttpHandler loginHandler = createLoginHandler("url", editorUrl);
@@ -405,20 +424,31 @@ public class HmeServer {
                 .setWelcomeFiles("index.html");
         HttpHandler rootHandler = Handlers.path()
                 // Redirect root path to /static to serve the index.html by default
-                .addExactPath("/", new PredicateHandler(ChicAccount.authnPredicate(),
+                .addExactPath("/", new PredicateHandler(authnPredicate,
                         Handlers.redirect(editorUrl), redirectToLoginHandler))
 
-                .addPrefixPath("/h", new PredicateHandler(ChicAccount.authnPredicate(),
+                .addPrefixPath("/h", new PredicateHandler(authnPredicate,
                         routing(true).get("{uuid}",
                                 exchange -> redirect(exchange, editorUrl +"#" + exchange.getQueryParameters().get("uuid").getFirst())),
                                 redirectToLoginHandler))
 
                 // Serve all static files from a folder
-                .addPrefixPath("/static", new PredicateHandler(ChicAccount.authnPredicate(),
+                .addPrefixPath("/static", new PredicateHandler(authnPredicate,
                         resourceHandler, redirectToLoginHandler))
 
+
+                // Provide image previews for the hypermodels: No authentication is required
+                // in order to be easily integrated (e.g. in the reports that CRAF generates)
+                .addExactPath("/preview",
+                        exchange -> exchange.dispatch(() -> preview_hypermodel(exchange, database)))
+
                 // REST API path
-                .addPrefixPath("/api", new PredicateHandler(ChicAccount.authnPredicate(), corsHandler, HmeServer::apiError401))
+                .addPrefixPath("/api", new PredicateHandler(apiRoutesPredicate, apiRoutes, HmeServer::apiError401))
+
+                // server-sent events, real time monitoring (e.g. for hypermodels execution status)
+                .addExactPath("/sse", new PredicateHandler(authnPredicate,
+                        exchange -> exchange.dispatch(() -> monitor(exchange, queueListener.observables())),
+                        HmeServer::apiError401))
 
                 .addExactPath("/login", SecurityHandler.build(loginHandler, samlConfig, "SAML2Client"))
 
@@ -431,7 +461,8 @@ public class HmeServer {
         final SessionCookieConfig sessionConfig = new SessionCookieConfig();
         sessionConfig.setCookieName("HMESESSIONID");
         sessionConfig.setPath(FileUtils.endWithSlash(BASE_PATH));
-        final InMemorySessionManager sessionManager = new InMemorySessionManager("SessionManager");
+        sessionConfig.setHttpOnly(true);
+        final InMemorySessionManager sessionManager = new InMemorySessionManager("SessionManager", serverConfig.maxSessions());
         final SessionAttachmentHandler sessionHandler =
                 new SessionAttachmentHandler(Handlers.path().addPrefixPath(BASE_PATH, rootHandler),
                         sessionManager,
@@ -466,19 +497,29 @@ public class HmeServer {
                 });
     }
 
-    private static void publish_hypermodel(HttpServerExchange exchange,
-                                           Db database,
-                                           ModelRepository modelRepository)
+    private static void publishHypermodelAndRun(HttpServerExchange exchange,
+                                                Db database,
+                                                ModelRepository modelRepository,
+                                                ExecutionManager executionManager)
     {
         final Optional<UUID> uuidOpt = getUuidParam(exchange, "uuid");
         if (!uuidOpt.isPresent()) {
             sendNotFound(exchange, "Hypermodel not found!");
             return;
         }
+        Optional<String> actAsOpt = ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
+        if (!actAsOpt.isPresent()) {
+            sendError(exchange, "Not authenticated", StatusCodes.UNAUTHORIZED);
+            return;
+        }
+
+        final UUID hypermodelUuid = uuidOpt.get();
+        final String actAs = actAsOpt.get();
 
         exchange.startBlocking();
 
         String workflowDescription;
+        long version = 0;
         Boolean isStronglyCoupled;
         List<ModelParameter> inputs, outputs;
         try {
@@ -486,25 +527,57 @@ public class HmeServer {
             JSONParser parser = new JSONParser(JSONParser.MODE_RFC4627);
             final JSONObject o = (JSONObject) parser.parse(exchange.getInputStream());
             workflowDescription = o.getAsString("xmml");
+            version = Long.valueOf(o.getAsString("version"));
             isStronglyCoupled = (Boolean) o.getOrDefault("isStronglyCoupled", Boolean.FALSE);
             JSONArray ins = (JSONArray) o.get("inputs");
-            inputs = ins.stream().map(JSONObject.class::cast).map(ModelParameter::fromJson).collect(Collectors.toList());
-            JSONArray outs = (JSONArray) o.get("inputs");
+            inputs = ins.stream()
+                    .map(JSONObject.class::cast)
+                    .map(js -> {
+                        final ModelParameter param = ModelParameter.fromJson((JSONObject) js.get("param"));
+                        final String value = js.getAsString("value");
+                        return param.withValue(value);
+                    })
+                    .collect(Collectors.toList());
+
+            JSONArray outs = (JSONArray) o.get("outputs");
             outputs = outs.stream().map(JSONObject.class::cast).map(ModelParameter::fromJson).collect(Collectors.toList());
         } catch (IOException | ParseException e) {
             sendException(exchange, e);
             return;
         }
-        Optional<String> actAsOpt = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
-        if (!actAsOpt.isPresent()) {
-            sendError(exchange, "Not authenticated", StatusCodes.UNAUTHORIZED);
-            return;
-        }
-        final String actAs = actAsOpt.get();
+
+        publishHypermodel(database, modelRepository, hypermodelUuid, version, actAs,
+                workflowDescription, inputs, outputs)
+                .thenCompose(hypermodel -> {
+                    final RepositoryId repoId = hypermodel.getPublishedRepoId().get();
+                    System.err.println("--> Running " + repoId);
+                    return executionManager.runHypermodel(repoId, "dfsfs", "dsf", inputs, actAs)
+                            .thenApply(experiment -> Tuple.tuple(hypermodel, experiment));
+                })
+                .whenComplete((tuple2, ex) -> {
+                    if (ex != null) {
+                        sendException(exchange, ex);
+                        return;
+                    }
+                    final Hypermodel hypermodel = tuple2.v1();
+                    final Experiment experiment = tuple2.v2();
+                    final RepositoryId experimentId = experiment.getId();
+                    final Experiment.EXP_RUN_STATE status = experiment.getStatus();
+                    final String jsonString = experiment.toJson().toJSONString();
+                    DbUtils.queryDb(database,
+                            "INSERT INTO experiments(experiment_id,hypermodel_uid,hypermodel_version,status,data)" +
+                                    " VALUES($1,$2,$3,$4,$5)",
+                            Arrays.asList(experimentId.getId(), hypermodel.getUuid(), hypermodel.getVersion(), status.toString(), jsonString));
 
 
-        final UUID hypermodelUuid = uuidOpt.get();
-        db_get_hypermodel(database, hypermodelUuid, Optional.empty(), actAs)
+                    JSONObject js = experiment.toJson();
+                    exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
+                });
+    }
+
+    private static CompletableFuture<Hypermodel> publishHypermodel(Db database, ModelRepository modelRepository, UUID hypermodelUuid, long version, String actAs, String workflowDescription, List<ModelParameter> inputs, List<ModelParameter> outputs) {
+        /*db_get_hypermodel(database, hypermodelUuid, Optional.empty(), actAs)
                 .whenComplete((rs, throwable)-> {
                     if (throwable != null) {
                         sendException(exchange, throwable);
@@ -527,7 +600,17 @@ public class HmeServer {
                                 exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                                 exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
                             });
-                });
+                }); */
+        return  db_get_hypermodel(database, hypermodelUuid, Optional.of(version), actAs)
+                .thenApply(opt  -> {
+                    if (!opt.isPresent()) {
+                        throw new RuntimeException("hypermodel " + hypermodelUuid + " not found");
+                    }
+                    return opt.get();
+                })
+                .thenCompose(hm -> modelRepository.storeHyperModel(hm, inputs, outputs, workflowDescription, actAs)
+                        .thenApply(model -> hm.withRepoId(model.getId()))
+                        .thenCompose(hypermodel -> db_publish_hypermodel(database, hypermodel, workflowDescription)));
     }
 
     private static void samlMetadata(final HttpServerExchange exchange, Config samlConfig) {
@@ -633,9 +716,9 @@ public class HmeServer {
                                      SemanticStore semanticStore) {
         System.err.println("-> getAllModels");
 
-        ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
-        ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.out::println);
-        Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
+        ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.err::println);
+        //Optional<String> actAs = ChicAccount.currentUser(exchange).map(u -> "crafsrv"); //XXX
+        Optional<String> actAs = ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
         final CompletableFuture<Map<UUID, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
         tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
@@ -688,12 +771,12 @@ public class HmeServer {
     }
 
 
-    private static String userId(final HttpServerExchange exchange) {
-        return "crafsrv"; // XXX
+    private static Optional<String> userId(final HttpServerExchange exchange) {
+        return ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
     }
 
     private static void get_hypermodels(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange);
+        final String user_id = userId(exchange).get();
 
         final String sql =
                 "SELECT * FROM hypermodel_versions_vw WHERE user_id=$1 AND hypermodel_version=most_recent_version";
@@ -737,7 +820,7 @@ public class HmeServer {
     }
 
     private static void get_hypermodel(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange);
+        final String user_id = userId(exchange).get();
         final Optional<UUID> uuidOptional = getUuidParam(exchange, "uuid");
         if (!uuidOptional.isPresent()) {
             sendError(exchange, "Hypermodel was not found!", StatusCodes.NOT_FOUND);
@@ -818,16 +901,16 @@ public class HmeServer {
     }
 
     static void preview_hypermodel(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange);
+        final String user_id = userId(exchange).get();
 
-        final Optional<UUID> uuidOptional = getUuidParam(exchange, "uuid");
+        final Optional<UUID> uuidOptional = getUuidParam(exchange, "hmid");
         if (!uuidOptional.isPresent()) {
             sendError(exchange, "Hypermodel not found!", StatusCodes.NOT_FOUND);
             return;
         }
 
         final UUID uuid = uuidOptional.get();
-        final Long version = getParam(exchange, "version").map(Long::valueOf).orElse(0L);
+        final Long version = getParam(exchange, "ver").map(Long::valueOf).orElse(0L);
 
 //        String etag = queryParameters.entrySet().stream()
 //                .map(entry -> entry.getKey() + ":" + entry.getValue().getFirst())
@@ -858,11 +941,12 @@ public class HmeServer {
 
         }
 
-        final String sql = "SELECT svg_content FROM hypermodels" +
-                " JOIN hypermodel_versions USING (hypermodel_uid)" +
-                " WHERE user_id=$1 AND hypermodel_uid=$2 AND hypermodel_version=$3";
+        final String sql = "SELECT svg_content FROM hypermodel_versions_vw" +
+                " WHERE user_id=$1 AND hypermodel_uid=$2 AND hypermodel_version=" +
+                (version > 0 ? "$3" : "most_recent_version");
 
-        DbUtils.queryOneDb(db, sql, Arrays.asList(user_id, uuid, version))
+        final List params = version > 0 ? Arrays.asList(user_id, uuid, version) : Arrays.asList(user_id, uuid);
+        DbUtils.queryOneDb(db, sql, params)
                 .whenComplete((rs, throwable) -> {
                     if (throwable != null) {
                         sendException(exchange, throwable);
@@ -900,7 +984,8 @@ public class HmeServer {
     }
 
     static void sendException(final HttpServerExchange exchange, final Throwable throwable, int code) {
-        throwable.printStackTrace();
+//        throwable.printStackTrace();
+        log.error("Error", throwable);
         sendError(exchange, throwable.getMessage(), code);
     }
 
@@ -959,7 +1044,7 @@ public class HmeServer {
 
     private static void save_hypermodel(final HttpServerExchange exchange, Db db) {
 
-        final String user_id = userId(exchange);
+        final String user_id = userId(exchange).get();
         final Consumer<Throwable> onError = throwable -> sendException(exchange, throwable);
         exchange.startBlocking();
         try {
@@ -1096,7 +1181,7 @@ public class HmeServer {
                 .updatedAt(updated.toInstant())
                 .graph(graphJson)
                 .allVersions(Arrays.asList(versions))
-                .publishedRepoId(repository_id)
+                .publishedRepoId(repository_id.orElse(null))
                 .build();
         return hm;
     }
@@ -1104,7 +1189,7 @@ public class HmeServer {
 
 
     static void monitor(HttpServerExchange exchange, Observables observables) {
-        final String userId = userId(exchange);
+        final String userId = userId(exchange).get();
         System.out.printf("[%s] monitor_experiment\n", userId);
         try {
             exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");

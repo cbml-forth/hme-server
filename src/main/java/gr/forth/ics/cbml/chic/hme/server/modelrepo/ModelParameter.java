@@ -10,6 +10,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Value
 @Builder
@@ -69,12 +70,12 @@ public class ModelParameter {
         m.put("default_value", defaultValue);
         m.put("description", description);
 
-        m.put("semtype", semTypes);
-        m.put("is_output", Boolean.valueOf(this.output));
+        m.put("semtype", semTypes); //semTypes.stream().collect(Collectors.joining(" ")));
+        m.put("is_output", this.output);
         m.put("is_static", !this.dynamic);
-        m.put("is_dynamic", Boolean.valueOf(this.dynamic));
+        m.put("is_dynamic", this.dynamic);
 
-        m.put("is_mandatory", Boolean.valueOf(this.mandatory));
+        m.put("is_mandatory", this.mandatory);
         m.put("data_range", range);
         m.put("unit", unit);
         return m;
@@ -110,9 +111,16 @@ public class ModelParameter {
         boolean output = getNumberOrDef(jsonObject, "is_output", 0) != 0;
         String defaultValue = getStringOrDef(jsonObject, "default_value");
         String description = getStringOrDef(jsonObject, "description").replace("\r", "").replace("\n", " ");
-
-        final String semtypeStr = getStringOrDef(jsonObject, "semtype");
-        final List<String> semTypes = Arrays.asList(semtypeStr.split("\\s+"));
+        final Object o = jsonObject.get("semtype");
+        List<String> semTypes;
+        if (o instanceof List) {
+            final List<Object> objs = (List<Object>) o;
+            semTypes = objs.stream().map(Object::toString).collect(Collectors.toList());
+        }
+        else {
+            final String semtypeStr = getStringOrDef(jsonObject, "semtype");
+            semTypes = Arrays.asList(semtypeStr.split("\\s+"));
+        }
 
         boolean dynamic = getNumberOrDef(jsonObject, "is_static", 1) == 0;
 

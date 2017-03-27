@@ -19,6 +19,7 @@ import gr.forth.ics.cbml.chic.hme.server.SAMLToken;
 import gr.forth.ics.cbml.chic.hme.server.TokenManager;
 import gr.forth.ics.cbml.chic.hme.server.WebApiServer;
 import gr.forth.ics.cbml.chic.hme.server.utils.FutureUtils;
+import gr.forth.ics.cbml.chic.hme.server.utils.UriUtils;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import lombok.val;
@@ -26,6 +27,7 @@ import net.minidev.json.JSONObject;
 
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
@@ -38,13 +40,15 @@ import java.util.stream.Collectors;
 @Slf4j
 public class ModelRepository implements AutoCloseable {
 
-//    public final static String AUDIENCE = "https://mr.chic-vph.eu/";
-    public final static String AUDIENCE = "http://147.102.5.177/";
-    final static String BASE_URI = AUDIENCE + "model_app/";
+    public final URI AUDIENCE; // = "https://mr.chic-vph.eu/";
+    final URI BASE_URI;// = AUDIENCE + "model_app/";
     final WebApiServer apiServer;
     final TokenManager tokenManager;
 
-    public ModelRepository(int concurrency, TokenManager tokenManager) {
+    public ModelRepository(URI apiUrl, int concurrency, TokenManager tokenManager) {
+        this.BASE_URI = UriUtils.baseURI(apiUrl);
+        this.AUDIENCE = UriUtils.audienceURI(apiUrl);
+
         this.apiServer = new WebApiServer(concurrency);
         this.tokenManager = tokenManager;
     }
@@ -138,8 +142,8 @@ public class ModelRepository implements AutoCloseable {
                         .findAny());
     }
 
-    public static String fileUrl(final String file_id) {
-        return BASE_URI + "getFileById/?id=" + file_id;
+    public String fileUrl(final String file_id) {
+        return BASE_URI.resolve("getFileById/?id=" + file_id).toString();
     }
 
     public CompletableFuture<java.io.File> downloadFile(final String fileId,
@@ -247,15 +251,22 @@ public class ModelRepository implements AutoCloseable {
                                                     List<ModelParameter> outputs,
                                                     String workflowDescription,
                                                     String actAsUser) {
+
+        final Model toModel = hypermodel.withPublishedRepoId(new RepositoryId(0)).toModel();
+        toModel.setInputs(inputs);
+        toModel.setOutputs(outputs);
+        System.err.println("--> " + toModel.toJSON().toJSONString());
         return this.tokenManager
                 .getDelegationToken(this.AUDIENCE, actAsUser)
                 .thenCompose(token ->
                         this.storeHyperModelAsTool(hypermodel, token)
-                                .thenApply(model -> {
+                                .thenCompose(model -> {
                                     final WorkflowKind kind = hypermodel.kind();
                                     //String fileTitle = String.valueOf((title + " (" + version + ")." + kind).hashCode());
                                     String fileTitle = "a" + UUID.randomUUID().toString() + "_" + hypermodel.getVersion() + "." + kind;
-                                    this.storeWorkflowDescriptionForModel(model, fileTitle, kind, workflowDescription, token)
+                                    return this.storeWorkflowDescriptionForModel(model, fileTitle, kind, workflowDescription, token)
+                                            // Store the xMML description of the model and then the input parameters and output values
+                                            /*
                                             .thenCompose(model1 -> storeParameters(model1, false, inputs, token))
                                             .thenCompose(model2 -> storeParameters(model2, true, outputs, token))
                                             .whenComplete((model3, throwable) -> {
@@ -265,8 +276,8 @@ public class ModelRepository implements AutoCloseable {
                                                 else {
                                                     log.info("storeHypermodel", throwable.getCause());
                                                 }
-                                            });
-                                    return model;
+                                            })*/;
+                                    //return model;
                                 }));
     }
 

@@ -25,9 +25,12 @@ public class Hypermodel {
     final boolean isStronglyCoupled; //XXX
     @Singular List<Long> allVersions;
     @Wither
-    Optional<RepositoryId> publishedRepoId;
+    RepositoryId publishedRepoId;
 
 
+    public Optional<RepositoryId> getPublishedRepoId() {
+        return Optional.ofNullable(this.publishedRepoId);
+    }
     public String versionStr()
     {
         final String major = isFrozen ? "1" : "0";
@@ -40,7 +43,7 @@ public class Hypermodel {
     }
     public String uri()
     {
-        return "/hypermodels/" + uuid;
+        return "/api/hypermodels/" + uuid;
     }
     public String versionUri(long version)
     {
@@ -63,8 +66,8 @@ public class Hypermodel {
         js.put("created_at", dateTimeFormatter.format(createdAt));
         js.put("updated_at", dateTimeFormatter.format(updatedAt));
         js.put("graph", graph);
-        if (publishedRepoId.isPresent()) {
-            final RepositoryId repositoryId = publishedRepoId.get();
+        if (publishedRepoId != null) {
+            final RepositoryId repositoryId = publishedRepoId;
             js.put("publishedRepoId", repositoryId.toJSON());
         }
 
@@ -80,7 +83,7 @@ public class Hypermodel {
 
     public Hypermodel withRepoId(RepositoryId id)
     {
-        return this.withPublishedRepoId(Optional.of(id));
+        return this.withPublishedRepoId(id);
     }
 
     public WorkflowKind kind() {
@@ -88,8 +91,8 @@ public class Hypermodel {
     }
     public Model toModel()
     {
-        assert this.publishedRepoId.isPresent();
-        final Model model = new Model(this.publishedRepoId.get(),
+        assert this.publishedRepoId != null;
+        final Model model = new Model(this.publishedRepoId,
                 this.name, this.description,
                 this.uuid, this.isStronglyCoupled, this.isFrozen);
         model.setInputs(Collections.emptyList());

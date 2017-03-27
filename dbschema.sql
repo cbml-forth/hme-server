@@ -42,6 +42,15 @@ CREATE TABLE published_versions (
 );
 CREATE INDEX published_versions_hypermodel_version ON published_versions(hypermodel_version);
 
+CREATE TABLE experiments (
+  experiment_id INTEGER PRIMARY KEY, -- The Repository's ID
+  hypermodel_uid UUID NOT NULL REFERENCES hypermodels(hypermodel_uid) ON DELETE CASCADE,
+  hypermodel_version BIGINT NOT NULL REFERENCES hypermodel_versions(hypermodel_version) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  data JSONB NOT NULL,
+  inserted_at TIMESTAMP(6) NOT NULL DEFAULT statement_timestamp()
+);
+
 
 CREATE TABLE events (
   event_id BIGSERIAL PRIMARY KEY,

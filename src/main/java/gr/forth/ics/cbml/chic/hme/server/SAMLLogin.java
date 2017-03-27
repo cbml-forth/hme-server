@@ -17,6 +17,7 @@ package gr.forth.ics.cbml.chic.hme.server;
 
 import com.ning.http.client.*;
 import gr.forth.ics.cbml.chic.hme.server.utils.FileUtils;
+import lombok.extern.slf4j.Slf4j;
 import nu.xom.Builder;
 import nu.xom.Element;
 import nu.xom.ParsingException;
@@ -33,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * Created by ssfak on 19/11/15.
  */
+@Slf4j
 public class SAMLLogin implements AutoCloseable {
 
 
@@ -129,39 +131,47 @@ public class SAMLLogin implements AutoCloseable {
         return createTokenImpl(username, password, audience, Optional.of(actsAs));
     }
 
+    private Exception clientTrace() {
+        return new Exception("Client stack trace");
+    }
 
     private CompletableFuture<SAMLToken> createTokenImpl(final String username, final String password, final String audience, Optional<String> actAsUser) {
 
         CompletableFuture<SAMLToken> fut = new CompletableFuture<>();
         try {
             String xml_request = create_token_request(username, password, audience, actAsUser);
-            // System.err.println(xml_request);
 
             final Request request =
                     this.httpClient.preparePost(secureTokenService).addHeader("Content-type", "application/xml")
                             .setBody(xml_request).build();
 
+            final Exception clientTrace = clientTrace();
 
             this.httpClient.executeRequest(request,
                     new AsyncCompletionHandler<Response>() {
                         @Override
                         public void onThrowable(Throwable t) {
-                            System.err.println("ERROR EX: " + t + " for " + request.getUrl());
+                            log.error("Network Error: {} for {}", t.getMessage(), request.getUrl());
                             fut.completeExceptionally(t);
                         }
 
                         @Override
                         public Response onCompleted(Response response) throws Exception {
-                            if (response.getStatusCode() == 404)
-                                fut.completeExceptionally(new RuntimeException("Resource " + response.getUri() +
-                                        " (method: " + request.getMethod() + ") not found?"));
-                            else if (response.getStatusCode() / 100 != 2) {
-                                System.err.println("ERROR: " + response.getStatusText() + " for " + request.getUrl() + " ERROR: " + response.getResponseBody());
-                                fut.completeExceptionally(new RuntimeException("API server returned: '" + response.getResponseBody() + "'"));
+                            if (response.getStatusCode() / 100 != 2) {
+                                final RuntimeException ex = new RuntimeException("API server returned: '" + response.getResponseBody() + "'");
+                                ex.setStackTrace(clientTrace.getStackTrace());
+                                fut.completeExceptionally(ex);
                             } else {
-                                final SAMLToken samlToken = SAMLToken.fromXml(response.getResponseBodyAsStream())
-                                        .orElseGet(() -> null);
-                                fut.complete(samlToken);
+                                final Optional<SAMLToken> tokenOptional = SAMLToken.fromXml(response.getResponseBodyAsStream());
+                                if (tokenOptional.isPresent()) {
+                                    final SAMLToken samlToken = tokenOptional.get();
+                                    fut.complete(samlToken);
+                                }
+                                else {
+                                    final RuntimeException ex = new RuntimeException("Empty SAML token");
+                                    ex.setStackTrace(clientTrace.getStackTrace());
+                                    fut.completeExceptionally(ex);
+                                }
                             }
                             return response;
                         }

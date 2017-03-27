@@ -1,5 +1,6 @@
 package gr.forth.ics.cbml.chic.hme.server.execution;
 
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.RepositoryId;
 import lombok.Data;
 import net.minidev.json.JSONObject;
 
@@ -19,10 +20,6 @@ import java.util.UUID;
 public class Experiment {
     public Map<String, String> input_values;
 
-    public static class ID {
-        public UUID id;
-    }
-
     public enum EXP_RUN_STATE {
         NOT_STARTED, RUNNING, FINISHED_FAIL, FINISHED_OK;
 
@@ -39,7 +36,7 @@ public class Experiment {
         }
     }
 
-    final String id;
+    final RepositoryId id;
     final String uuid;
     final String user_uuid;
 
@@ -54,11 +51,11 @@ public class Experiment {
     LocalDateTime createdOn; // The Date it was stored in the Repository as reported by the repo itself.
     LocalDateTime modifiedOn; // The Date it was stored in the Repository as reported by the repo itself.
 
-    public Experiment(final String user_uuid, final String id, final String uuid) {
+    public Experiment(final String user_uuid, final RepositoryId id, final String uuid) {
         this(user_uuid, id, uuid, null);
     }
 
-    public Experiment(final String user_uuid, final String id, final String uuid, final Trial trial) {
+    public Experiment(final String user_uuid, final RepositoryId id, final String uuid, final Trial trial) {
         this.id = id;
         this.uuid = uuid;
         this.user_uuid = user_uuid;
@@ -180,7 +177,7 @@ public class Experiment {
     public JSONObject toJson() {
         final Experiment experiment = this;
         JSONObject js = new JSONObject();
-        js.put("id", experiment.id);
+        js.put("id", experiment.id.toJSON());
         js.put("uuid", experiment.uuid);
         js.put("workflow_uuid", experiment.workflow_uuid);
         js.put("user_uid", experiment.user_uuid);

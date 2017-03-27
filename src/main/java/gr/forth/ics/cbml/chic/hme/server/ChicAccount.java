@@ -66,7 +66,7 @@ public final class ChicAccount {
 
     @Override
     public String toString() {
-        return "<User " + this.getUserId() + " [" + this.getUserName() + ", " + this.getEmail() + "]>";
+        return "<User " + this.getUserId() + " [" + this.getUsername() + ", " + this.getEmail() + "]>";
     }
 
     private static HashMap<String, String> samlNamesToUserFriendly =
@@ -101,8 +101,11 @@ public final class ChicAccount {
             return attributes.get("uid");
         return attributes.getOrDefault("rfc2798_uid", "");
     }
+    String getUsername() {
+        return attributes.getOrDefault("rfc2798_uid", "");
+    }
 
-    String getUserName() {
+    String getPersonName() {
         if (attributes.containsKey("displayName"))
             return attributes.get("displayName");
         if (attributes.containsKey("cn"))

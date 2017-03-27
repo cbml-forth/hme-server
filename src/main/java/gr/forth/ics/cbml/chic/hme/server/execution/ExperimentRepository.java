@@ -8,12 +8,14 @@ import gr.forth.ics.cbml.chic.hme.server.SAMLToken;
 import gr.forth.ics.cbml.chic.hme.server.WebApiServer;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.RepositoryId;
 import gr.forth.ics.cbml.chic.hme.server.utils.FutureUtils;
+import gr.forth.ics.cbml.chic.hme.server.utils.UriUtils;
 import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONObject;
 
 import javax.xml.bind.DatatypeConverter;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -27,12 +29,16 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 public class ExperimentRepository implements AutoCloseable {
-    public final static String AUDIENCE = "https://istr.chic-vph.eu/";
-    final static String API_BASE_URI = AUDIENCE + "trial_app/";
+
+    public final URI AUDIENCE;
+    final URI API_BASE_URI;
     final WebApiServer apiServer;
 
-    public ExperimentRepository(int concurrency) {
+    public ExperimentRepository(URI apiUrl, int concurrency) {
         this.apiServer = new WebApiServer(concurrency);
+
+        this.API_BASE_URI = UriUtils.baseURI(apiUrl);
+        this.AUDIENCE = UriUtils.audienceURI(apiUrl);
     }
 
     public WebApiServer apiServer() { return this.apiServer; }
@@ -131,8 +137,8 @@ public class ExperimentRepository implements AutoCloseable {
                 .thenApply(jsonObject -> ((JSONObject) jsonObject).getAsString("id"));
     }
 
-    public static String fileUrl(final String file_id) {
-        return API_BASE_URI + "getTrFileById/?id=" + file_id;
+    public String fileUrl(final String file_id) {
+        return API_BASE_URI.resolve("getTrFileById/?id=" + file_id).toString();
     }
 
     public CompletableFuture<Void> downloadFile(final String file_id,
@@ -192,7 +198,7 @@ public class ExperimentRepository implements AutoCloseable {
                 .thenApply(JSONObject.class::cast)
                 .thenApply(jsonObject -> {
                     final Experiment experiment = new Experiment(token.getUserId(),
-                            jsonObject.getAsString("id"),
+                            RepositoryId.fromJsonObj(jsonObject, "id"),
                             jsonObject.getAsString("uuid"),
                             trial);
                     // experiment.setCreatedOn( DatatypeConverter.parseDateTime(jsonObject.getAsString("created_on")).getTime());
@@ -254,10 +260,10 @@ public class ExperimentRepository implements AutoCloseable {
      * @param experimentId The id (UUID) of the experiment
      * @return The Experiment object.
      */
-    public CompletableFuture<Experiment> getExperimentById(final SAMLToken token, final String experimentId) {
+    public CompletableFuture<Experiment> getExperimentById(final SAMLToken token, final RepositoryId experimentId) {
 
         return this.apiServer.getJsonAsync(API_BASE_URI + "getExperimentById/", token,
-                Collections.singletonMap("id", experimentId))
+                Collections.singletonMap("id", experimentId.toString()))
                 .thenCompose(jsonAware -> {
                     JSONObject jsonExp = (JSONObject) jsonAware;
                     final String uuid = jsonExp.getAsString("uuid");
@@ -296,7 +302,7 @@ public class ExperimentRepository implements AutoCloseable {
                 Collections.singletonMap("uuid", experimentUuid.toString()))
                 .thenCompose(jsonAware -> {
                     JSONObject jsonExp = (JSONObject) jsonAware;
-                    final String id = jsonExp.getAsString("id");
+                    final RepositoryId id = RepositoryId.fromJsonObj(jsonExp, "id");
 
                     final Experiment exp = new Experiment(token.getUserId(), id, experimentUuid.toString());
                     exp.description = jsonExp.getAsString("description");
@@ -351,7 +357,7 @@ public class ExperimentRepository implements AutoCloseable {
     }
 
     private Experiment jsonToExperiment(final SAMLToken token, JSONObject jsonExp) {
-        final String experimentId = jsonExp.getAsString("id");
+        final RepositoryId experimentId = RepositoryId.fromJsonObj(jsonExp, "id");
         final String uuid = jsonExp.getAsString("uuid");
 
         final Experiment exp = new Experiment(token.getUserId(), experimentId, uuid);
@@ -398,7 +404,7 @@ public class ExperimentRepository implements AutoCloseable {
     public CompletableFuture<Boolean> deleteExperiment(final Experiment experiment, final SAMLToken token) {
 
         return this.apiServer.deleteResourceAsync(API_BASE_URI + "deleteExperimentById/", token,
-                Collections.singletonMap("id", experiment.id))
+                Collections.singletonMap("id", experiment.id.toString()))
                 .thenCompose(experimentDeleted -> {
 
                     if (!experimentDeleted)

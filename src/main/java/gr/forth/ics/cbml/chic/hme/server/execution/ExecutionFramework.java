@@ -2,13 +2,15 @@ package gr.forth.ics.cbml.chic.hme.server.execution;
 
 import gr.forth.ics.cbml.chic.hme.server.SAMLToken;
 import gr.forth.ics.cbml.chic.hme.server.WebApiServer;
-import gr.forth.ics.cbml.chic.hme.server.modelrepo.Input;
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.ModelParameter;
+import gr.forth.ics.cbml.chic.hme.server.utils.UriUtils;
 import lombok.Value;
 import lombok.experimental.Wither;
 import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 
+import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -20,19 +22,20 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 public class ExecutionFramework implements AutoCloseable {
-    //    final static String API_BASE_URI = "http://localhost:3456/";
-    public final static String AUDIENCE = "https://hf.chic-vph.eu";
-    public final static String API_BASE_URI = AUDIENCE + "/api";
+    public final URI AUDIENCE;
+    public final URI API_BASE_URI;
 
     final WebApiServer apiServer;
+
+    public ExecutionFramework(URI apiUrl, int concurrency) {
+        this.apiServer = new WebApiServer(concurrency);
+        this.API_BASE_URI = UriUtils.baseURI(apiUrl);
+        this.AUDIENCE = UriUtils.audienceURI(apiUrl);
+    }
 
 
     public WebApiServer apiServer() {
         return this.apiServer;
-    }
-
-    public ExecutionFramework(int concurrency) {
-        this.apiServer = new WebApiServer(concurrency);
     }
 
     public CompletableFuture<List<String>> getWorkflowList(final SAMLToken token) {
@@ -46,7 +49,7 @@ public class ExecutionFramework implements AutoCloseable {
     }
 
 
-    public String createInputFile(final List<Input> inputs) {
+    public String createInputFile(final List<ModelParameter> inputs) {
 
         String b = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
                 "<b:dataThingMap xmlns:b=\"http://org.embl.ebi.escience/baclava/0.1alpha\" xmlns:s=\"http://org.embl.ebi.escience/xscufl/0.1alpha\">\n";
@@ -54,7 +57,7 @@ public class ExecutionFramework implements AutoCloseable {
         Base64.Encoder encoder = Base64.getEncoder();
 
         final Charset utf8 = StandardCharsets.UTF_8;
-        for (Input input : inputs) {
+        for (ModelParameter input : inputs) {
             final byte[] bytes = input.getValue().orElse("").getBytes(utf8);
             String in =
                     "  <b:dataThing key=\"" + input.getName() + "\">\n" +

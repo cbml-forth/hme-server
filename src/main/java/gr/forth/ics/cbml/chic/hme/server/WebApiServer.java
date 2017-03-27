@@ -93,10 +93,15 @@ public class WebApiServer implements AutoCloseable {
             request.getHeaders().put("Content-Length", Arrays.asList("0"));
 
         final CompletableFuture<JSONAware> fut = new CompletableFuture<>();
-        exec.submit(() -> executeJSONRequest(request, fut));
+        final Exception clientTrace = clientTrace();
+        exec.submit(() -> executeJSONRequest(request, fut, clientTrace));
         return fut;
     }
 
+
+    private Exception clientTrace() {
+        return new Exception("Client stack trace");
+    }
 
     public CompletableFuture<Boolean> deleteResourceAsync(final String url,
                                                           final SAMLToken token,
@@ -107,6 +112,7 @@ public class WebApiServer implements AutoCloseable {
             builder.addQueryParam(n, qs.get(n));
         }
         final Request request = builder.build();
+        final Exception clientTrace = clientTrace();
         final CompletableFuture<Boolean> fut = new CompletableFuture<>();
         exec.submit(() -> {
             try {
@@ -116,8 +122,9 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public void onThrowable(Throwable t) {
                                 req_in_flight.release();
+                                t.setStackTrace(clientTrace.getStackTrace());
 
-                                log.info("ERROR EX: {} for {}", t, request.getUrl());
+                                log.error("ERROR EX: {} for {}", t, request.getUrl());
                                 fut.completeExceptionally(t);
                             }
 
@@ -156,17 +163,20 @@ public class WebApiServer implements AutoCloseable {
         final Request request = builder.build();
 
         final CompletableFuture<InputStream> fut = new CompletableFuture<>();
-        exec.submit(() -> executeRequestAndParseResponse(request, fut));
-        return fut.thenApply(responseStream -> {
+        final Exception clientTrace = clientTrace();
+        final CompletableFuture<Element> future = fut.thenApply(responseStream -> {
             try {
                 Element root = new Builder().build(responseStream).getRootElement();
                 return root;
 
             } catch (Exception e) {
-                e.printStackTrace();
-                throw new RuntimeException("XML parsing failed");
+                final RuntimeException exception = new RuntimeException("XML parsing failed", e);
+                exception.setStackTrace(clientTrace.getStackTrace());
+                throw exception;
             }
         });
+        exec.submit(() -> executeRequestAndParseResponse(request, fut, clientTrace));
+        return future;
     }
 
 
@@ -182,6 +192,7 @@ public class WebApiServer implements AutoCloseable {
         final Request request = builder.build();
         final CompletableFuture<Void> fut = new CompletableFuture<>();
         final WebApiServer self = this;
+        final Exception clientTrace = clientTrace();
         exec.submit(() -> {
             try {
                 req_in_flight.acquire();
@@ -190,7 +201,8 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public void onThrowable(Throwable t) {
                                 req_in_flight.release();
-                                log.info("ERROR EX: {} for {}", t, request.getUrl());
+                                t.setStackTrace(clientTrace.getStackTrace());
+                                log.error("ERROR EX: {} for {}", t, request.getUrl());
                                 fut.completeExceptionally(t);
                                 self.total_req.incrementAndGet();
                                 self.failed_req.incrementAndGet();
@@ -200,8 +212,10 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public STATE onStatusReceived(HttpResponseStatus status) throws Exception {
                                 if (status.getStatusCode() / 100 != 2) {
-                                    log.info("ERROR: {} for {}", status.getStatusText(), request.getUrl());
-                                    fut.completeExceptionally(new RuntimeException("API returned: " + status.getStatusText()));
+                                    log.error("ERROR: {} for {}", status.getStatusText(), request.getUrl());
+                                    final RuntimeException ex = new RuntimeException("API returned: " + status.getStatusText());
+                                    ex.setStackTrace(clientTrace.getStackTrace());
+                                    fut.completeExceptionally(ex);
                                     return STATE.ABORT;
                                 }
                                 return super.onStatusReceived(status);
@@ -264,7 +278,8 @@ public class WebApiServer implements AutoCloseable {
         if (request.getContentLength() == 0)
             request.getHeaders().put("Content-Length", Arrays.asList("0"));
         final CompletableFuture<JSONAware> fut = new CompletableFuture<>();
-        exec.submit(() -> executeJSONRequest(request, fut));
+        final Exception clientTrace = clientTrace();
+        exec.submit(() -> executeJSONRequest(request, fut, clientTrace));
         return fut;
     }
 
@@ -310,6 +325,7 @@ public class WebApiServer implements AutoCloseable {
     private void emitJSONResponse(final Request request, final Emitter<JSONAware> emitter) {
         final WebApiServer self = this;
         try {
+            final Exception clientTrace = clientTrace();
             req_in_flight.acquire();
             final int requestNbr = self.total_req.incrementAndGet();
             //System.err.println("SENDING REQUEST:"); request.getHeaders().forEach((s, strings) -> System.err.println(s + ":" + strings));
@@ -317,8 +333,9 @@ public class WebApiServer implements AutoCloseable {
                 @Override
                 public void onThrowable(Throwable t) {
                     req_in_flight.release();
+                    t.setStackTrace(clientTrace.getStackTrace());
 
-                    log.info("ERROR EX: {} for {}", t, request.getUrl());
+                    log.error("ERROR EX: {} for {}", t, request.getUrl());
                     emitter.onError(t);
                 }
 
@@ -326,9 +343,11 @@ public class WebApiServer implements AutoCloseable {
                 public Response onCompleted(Response response) throws Exception {
                     req_in_flight.release();
                     if (response.getStatusCode() / 100 != 2) {
-                        log.info("ERROR: {} for '{}' BODY:\n{}", response.getStatusText(), request.getUrl(),
+                        log.error("ERROR: {} for '{}' BODY:\n{}", response.getStatusText(), request.getUrl(),
                                 response.getResponseBody());
-                        emitter.onError(new RuntimeException("API server returned: '" + response.getStatusText() + "'"));
+                        final RuntimeException ex = new RuntimeException("API server returned: '" + response.getStatusText() + "'");
+                        ex.setStackTrace(clientTrace.getStackTrace());
+                        emitter.onError(ex);
                     } else {
                         //System.out.println("----> GOT " + response.getStatusText());
                         //System.out.println(response.getResponseBody());
@@ -338,7 +357,7 @@ public class WebApiServer implements AutoCloseable {
                             emitter.onNext(p);
                             emitter.onCompleted();
                         } catch (ParseException | UnsupportedEncodingException e) {
-                            e.printStackTrace();
+                            e.setStackTrace(clientTrace.getStackTrace());
                             emitter.onError(e);
                         }
                     }
@@ -386,14 +405,16 @@ public class WebApiServer implements AutoCloseable {
             request.getHeaders().put("Content-Length", Arrays.asList("0"));
         // request.getHeaders().forEach(((s, strings) -> System.out.println(s + " : " + strings.stream().collect(Collectors.joining(",")))));
         final CompletableFuture<JSONAware> fut = new CompletableFuture<>();
-        exec.submit(() -> executeJSONRequest(request, fut));
+        final Exception clientTrace = clientTrace();
+        exec.submit(() -> executeJSONRequest(request, fut, clientTrace));
         return fut;
     }
 
-    private void executeJSONRequest(final Request request, final CompletableFuture<JSONAware> fut) {
+    private void executeJSONRequest(final Request request, final CompletableFuture<JSONAware> fut, final Exception clientTrace) {
         CompletableFuture<InputStream> bodyFut = new CompletableFuture<>();
         bodyFut.whenComplete((inStream, ex) -> {
             if (ex != null) {
+                log.error("executing JSON Request got {}", ex.getMessage(), clientTrace);
                 fut.completeExceptionally(ex);
                 return;
             }
@@ -402,11 +423,11 @@ public class WebApiServer implements AutoCloseable {
                 JSONAware p = (JSONAware) parser.parse(inStream);
                 fut.complete(p);
             } catch (ParseException | UnsupportedEncodingException e) {
-                e.printStackTrace();
+                e.setStackTrace(clientTrace.getStackTrace());
                 fut.completeExceptionally(e);
             }
         });
-        this.executeRequestAndParseResponse(request, bodyFut);
+        this.executeRequestAndParseResponse(request, bodyFut, clientTrace);
         /*
         try {
             req_in_flight.acquire();
@@ -449,7 +470,7 @@ public class WebApiServer implements AutoCloseable {
         } */
     }
 
-    private void executeRequestAndParseResponse(final Request request, final CompletableFuture<InputStream> fut) {
+    private void executeRequestAndParseResponse(final Request request, final CompletableFuture<InputStream> fut, final Exception clientTrace) {
         try {
             req_in_flight.acquire();
             final WebApiServer self = this;
@@ -458,7 +479,8 @@ public class WebApiServer implements AutoCloseable {
                         @Override
                         public void onThrowable(Throwable t) {
                             req_in_flight.release();
-                            log.info("ERROR EX: {} for {}", t, request.getUrl());
+                            t.setStackTrace(clientTrace.getStackTrace());
+                            log.error("ERROR EX: {} for {}", t, request.getUrl());
                             fut.completeExceptionally(t);
                             self.total_req.incrementAndGet();
                             self.failed_req.incrementAndGet();
@@ -467,13 +489,19 @@ public class WebApiServer implements AutoCloseable {
                         @Override
                         public Response onCompleted(Response response) throws Exception {
                             req_in_flight.release();
-                            if (response.getStatusCode() == 404)
-                                fut.completeExceptionally(new RuntimeException("Resource " + response.getUri() +
-                                        " (method: " + request.getMethod() + ") not found?"));
+                            if (response.getStatusCode() == 404) {
+                                final RuntimeException ex = new RuntimeException("Resource " + response.getUri() +
+                                        " (method: " + request.getMethod() + ") not found?");
+
+                                ex.setStackTrace(clientTrace.getStackTrace());
+                                fut.completeExceptionally(ex);
+                            }
                             else if (response.getStatusCode() / 100 != 2) {
                                 log.info("ERROR EX: {} for {} ERROR:\n{}", response.getStatusText(), request.getUrl(),
                                         response.getResponseBody());
-                                fut.completeExceptionally(new RuntimeException("API server returned: " + response.getStatusCode()));
+                                final RuntimeException ex = new RuntimeException("API server returned: " + response.getStatusCode());
+                                ex.setStackTrace(clientTrace.getStackTrace());
+                                fut.completeExceptionally(ex);
                             } else {
                                 //System.out.println("----> GOT " + response.getStatusText());
                                 //System.out.println(body);

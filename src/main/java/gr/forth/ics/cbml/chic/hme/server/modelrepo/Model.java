@@ -16,6 +16,7 @@
 package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
 import lombok.Data;
+import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 
 import java.util.Collections;
@@ -68,10 +69,20 @@ public class Model {
         });
         jsonObject.put("outPorts", outPorts);
         */
-        jsonObject.put("inPorts", this.inputs == null ? Collections.emptyList() : this.inputs.stream().map(ModelParameter::toJson).collect(Collectors.toList()));
-        jsonObject.put("outPorts", this.outputs == null ? Collections.emptyList() : this.outputs.stream().map(ModelParameter::toJson).collect(Collectors.toList()));
+        jsonObject.put("inPorts", listParamsToJson(this.inputs) );
+        jsonObject.put("outPorts", listParamsToJson(this.outputs));
 
         jsonObject.put("perspectives", null);
         return jsonObject;
+    }
+
+    private static JSONArray listParamsToJson(List<ModelParameter> params)
+    {
+        final List<JSONObject> list = params == null ? Collections.emptyList() : params.stream().map(ModelParameter::toJson).collect(Collectors.toList());
+
+        final JSONArray jsonArray = new JSONArray();
+        jsonArray.addAll(list);
+        return jsonArray;
+
     }
 }

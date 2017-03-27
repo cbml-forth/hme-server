@@ -67,8 +67,10 @@ public class SAMLToken {
     public static Optional<SAMLToken> fromXml(Element xml) {
         final SAMLToken token = new SAMLToken();
         token.parse_assertions(xml);
-        if (token.assertions.isEmpty())
+        if (token.assertions.isEmpty()) {
+            log.error("No assertions found in SAML token! {}", xml.toXML());
             return Optional.empty();
+        }
         token.xml = xml;
         token.create_http_token();
         return Optional.of(token);
