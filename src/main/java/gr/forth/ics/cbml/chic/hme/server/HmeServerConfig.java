@@ -34,6 +34,7 @@ public interface HmeServerConfig extends Config, Accessible {
 
     String secureTokenService();
 
+    String staticDir();
 
     // The credentials used for the CRAF Service Account
     @DefaultValue("hme")

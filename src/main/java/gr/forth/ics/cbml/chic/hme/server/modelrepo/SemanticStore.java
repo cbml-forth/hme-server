@@ -46,6 +46,10 @@ public class SemanticStore implements  AutoCloseable {
     }
 
 
+    static Exception clientStackTrace() {
+        return new Exception("client stack");
+    }
+
     CompletableFuture<String> send_query(final String query) {
         final CompletableFuture<String> fut = new CompletableFuture<>();
         Map<String, List<String>> params = new HashMap<>();
@@ -57,20 +61,25 @@ public class SemanticStore implements  AutoCloseable {
                 .setFormParams(params)
                 .setHeader("Accept", "text/csv")
                 .build();
+        final Exception clientStackTrace = clientStackTrace();
         asyncHttpClient.prepareRequest(r).execute(new AsyncCompletionHandler<Void>() {
             @Override
             public Void onCompleted(Response response) throws Exception {
                 // System.out.println("Response returned " + response.getStatusCode() + " at thread " + Thread.currentThread().getId() + "\n");
                 if (response.getStatusCode() / 100 == 2) // i.e. 2xx
                     fut.complete(response.getResponseBody());
-                else
-                    fut.completeExceptionally(new Throwable(response.getResponseBody()));
+                else {
+                    final Throwable ex = new Throwable(response.getResponseBody());
+                    ex.setStackTrace(clientStackTrace.getStackTrace());
+                    fut.completeExceptionally(ex);
+                }
                 return null;
             }
 
             @Override
             public void onThrowable(Throwable t) {
                 System.out.println("Response error " + t.getMessage());
+                t.setStackTrace(clientStackTrace.getStackTrace());
                 fut.completeExceptionally(t);
             }
         });

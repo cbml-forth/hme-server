@@ -420,7 +420,7 @@ public class HmeServer {
         final HttpHandler loginHandler = createLoginHandler("url", editorUrl);
         final HttpHandler redirectToLoginHandler = createLoginRedirectHandler("url", BASE_PATH + "/login");
         final ResourceHandler resourceHandler = new ResourceHandler(
-                new PathResourceManager(Paths.get("/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme-ng/src"), 1024))
+                new PathResourceManager(Paths.get(serverConfig.staticDir()), 1024))
                 .setWelcomeFiles("index.html");
         HttpHandler rootHandler = Handlers.path()
                 // Redirect root path to /static to serve the index.html by default
@@ -719,7 +719,12 @@ public class HmeServer {
         ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.err::println);
         //Optional<String> actAs = ChicAccount.currentUser(exchange).map(u -> "crafsrv"); //XXX
         Optional<String> actAs = ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
-        final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore);
+        final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore)
+                .exceptionally(ex -> {
+                    log.error("Getting annotations ", ex);
+
+                    return Collections.<Map<String, String>>emptyList();
+                });
         final CompletableFuture<Map<UUID, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
         tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
                 .thenCompose(modelRepository::getAllModels)
@@ -778,12 +783,16 @@ public class HmeServer {
     private static void get_hypermodels(final HttpServerExchange exchange, Db db) {
         final String user_id = userId(exchange).get();
 
+        final long start = System.currentTimeMillis();
+
         final String sql =
                 "SELECT * FROM hypermodel_versions_vw WHERE user_id=$1 AND hypermodel_version=most_recent_version";
 
         final Consumer<Throwable> onError = throwable -> sendException(exchange, throwable);
         db.query(sql, Arrays.asList(user_id),
                 rs -> {
+                    final long stop = System.currentTimeMillis();
+                    double elapsedTime = (stop - start) / 1000.0;
                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
                     JSONArray l = new JSONArray();
                     rs.forEach(row -> {
@@ -796,6 +805,7 @@ public class HmeServer {
                         }
 
                     });
+                    exchange.getResponseHeaders().add(HttpString.tryFromString("Server-Timing"), String.format("db=%f ;Database", elapsedTime));
                     exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send(l.toJSONString(), IoCallback.END_EXCHANGE);
                 },
@@ -1062,13 +1072,14 @@ public class HmeServer {
 
             final boolean frozen = (Boolean) o.getOrDefault("frozen", Boolean.FALSE);
 
-            db.query("WITH upd AS " +
-                            "(INSERT INTO hypermodels(hypermodel_uid,user_id)" +
-                            " VALUES($1,$2) ON CONFLICT (hypermodel_uid) DO UPDATE SET updated=now()" +
-                            " RETURNING *)" +
-                            " SELECT MAX(hypermodel_version) most_recent_version" +
-                            " FROM hypermodel_versions JOIN upd USING (hypermodel_uid)",
-                    Arrays.asList(uuid, user_id),
+            final String sql = "WITH upd AS " +
+                    "(INSERT INTO hypermodels(hypermodel_uid,user_id)" +
+                    " VALUES($1,$2) ON CONFLICT (hypermodel_uid) DO UPDATE SET updated=now()" +
+                    " RETURNING *)" +
+                    " SELECT MAX(hypermodel_version) most_recent_version" +
+                    " FROM hypermodel_versions JOIN upd USING (hypermodel_uid)";
+            long start = System.currentTimeMillis();
+            db.query(sql, Arrays.asList(uuid, user_id),
                     rs -> {
 
                         final Long most_recent_version = rs.row(0).getLong(0);
@@ -1082,11 +1093,15 @@ public class HmeServer {
                                             " RETURNING hypermodel_version",
                                     Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen, isStronglyCoupled),
                                     rs1 -> {
+                                        long stop = System.currentTimeMillis();
+                                        double elapsedTime = (stop - start) / 1000.0;
+
                                         final Long version = rs1.row(0).getLong(0);
                                         final ETag eTag2 = hypermodelEtag(version);
 
                                         exchange.setStatusCode(StatusCodes.CREATED);
                                         exchange.getResponseHeaders()
+                                                .add(HttpString.tryFromString("Server-Timing"), String.format("db=%f ;Database", elapsedTime))
                                                 .add(Headers.LOCATION, String.format("/hypermodels/%s/%d", uuid, version))
                                                 .add(Headers.ETAG, eTag2.toString());
                                         exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
