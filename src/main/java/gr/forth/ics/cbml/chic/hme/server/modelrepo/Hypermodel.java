@@ -94,9 +94,8 @@ public class Hypermodel {
         assert this.publishedRepoId != null;
         final Model model = new Model(this.publishedRepoId,
                 this.name, this.description,
-                this.uuid, this.isStronglyCoupled, this.isFrozen);
-        model.setInputs(Collections.emptyList());
-        model.setOutputs(Collections.emptyList());
+                this.uuid, this.isStronglyCoupled, this.isFrozen,
+                Collections.emptyList(), Collections.emptyList());
         return model;
 
     }

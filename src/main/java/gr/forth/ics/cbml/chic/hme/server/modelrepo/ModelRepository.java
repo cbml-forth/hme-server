@@ -172,9 +172,7 @@ public class ModelRepository implements AutoCloseable {
                             .map(ModelParameter::fromJson)
                             .sorted(Comparator.comparing(modelParameter -> modelParameter.getId().getId()))
                             .collect(Collectors.partitioningBy(ModelParameter::isOutput));
-                    model.setOutputs(map.get(true));
-                    model.setInputs(map.get(false));
-                    return model;
+                    return model.withInputs(map.get(false)).withOutputs(map.get(true));
                 })
                 .whenComplete((m, ex) -> {
                     if (m != null)
@@ -212,7 +210,7 @@ public class ModelRepository implements AutoCloseable {
         final Number isFrozenNum = modelJson.getAsNumber("freezed");
         final boolean isStronglyCoupled = strongly_coupled != null && strongly_coupled.intValue() != 0;
         final boolean isFrozen = isFrozenNum != null && isFrozenNum.intValue() != 0;
-        return new Model(modelId, name, description, uuid, isStronglyCoupled, isFrozen);
+        return new Model(modelId, name, description, uuid, isStronglyCoupled, isFrozen, Collections.emptyList(), Collections.emptyList());
     }
 
 
@@ -253,32 +251,31 @@ public class ModelRepository implements AutoCloseable {
                                                     String actAsUser) {
 
         final Model toModel = hypermodel.withPublishedRepoId(new RepositoryId(0)).toModel();
-        toModel.setInputs(inputs);
-        toModel.setOutputs(outputs);
+        final Model completeModel = toModel.withInputs(inputs).withOutputs(outputs);
         System.err.println("--> " + toModel.toJSON().toJSONString());
         return this.tokenManager
                 .getDelegationToken(this.AUDIENCE, actAsUser)
                 .thenCompose(token ->
-                        this.storeHyperModelAsTool(hypermodel, token)
+                        this.storeHyperModelAsTool2(completeModel, token)
                                 .thenCompose(model -> {
                                     final WorkflowKind kind = hypermodel.kind();
                                     //String fileTitle = String.valueOf((title + " (" + version + ")." + kind).hashCode());
                                     String fileTitle = "a" + UUID.randomUUID().toString() + "_" + hypermodel.getVersion() + "." + kind;
-                                    return this.storeWorkflowDescriptionForModel(model, fileTitle, kind, workflowDescription, token)
-                                            // Store the xMML description of the model and then the input parameters and output values
-                                            /*
-                                            .thenCompose(model1 -> storeParameters(model1, false, inputs, token))
-                                            .thenCompose(model2 -> storeParameters(model2, true, outputs, token))
-                                            .whenComplete((model3, throwable) -> {
-                                                if (throwable == null) {
-                                                    cacheModel(model3);
-                                                }
-                                                else {
-                                                    log.info("storeHypermodel", throwable.getCause());
-                                                }
-                                            })*/;
+                                    return this.storeWorkflowDescriptionForModel(model, fileTitle, kind, workflowDescription, token);
                                     //return model;
                                 }));
+    }
+
+    CompletableFuture<Model> storeHyperModelAsTool2(Model hypermodel, SAMLToken token) {
+        final String url = BASE_URI + "storeHypermodel/";
+        return this.apiServer.postJsonAsync(url, token, hypermodel.toJSON())
+                .thenApply(JSONObject.class::cast)
+                .thenApply(jsonObject -> {
+                    final RepositoryId repoId = RepositoryId.fromJsonObj(jsonObject, "model_id");
+                    log.info("MODEL {} stored in Repo as {}", hypermodel.getName(), repoId);
+                    return hypermodel.withId(repoId);
+                });
+
     }
 
     CompletableFuture<Model> storeHyperModelAsTool(Hypermodel hypermodel, SAMLToken token) {
@@ -422,13 +419,7 @@ public class ModelRepository implements AutoCloseable {
                     }));
         }).collect(Collectors.toList());
         return FutureUtils.sequence(futures)
-                .thenApply(updatedParams -> {
-                    if (isOutput)
-                        model.setOutputs(updatedParams);
-                    else
-                        model.setInputs(updatedParams);
-                    return model;
-                });
+                .thenApply(updatedParams -> isOutput ? model.withOutputs(updatedParams) : model.withInputs(updatedParams));
     }
 
     @Override

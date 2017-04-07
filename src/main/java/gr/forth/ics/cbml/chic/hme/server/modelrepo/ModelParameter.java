@@ -70,7 +70,8 @@ public class ModelParameter {
         m.put("default_value", defaultValue);
         m.put("description", description);
 
-        m.put("semtype", semTypes); //semTypes.stream().collect(Collectors.joining(" ")));
+        m.put("semtype_array", semTypes);
+        m.put("semtype", semTypes.stream().collect(Collectors.joining(" ")));
         m.put("is_output", this.output);
         m.put("is_static", !this.dynamic);
         m.put("is_dynamic", this.dynamic);

@@ -16,6 +16,7 @@
 package gr.forth.ics.cbml.chic.hme.server.modelrepo;
 
 import lombok.Data;
+import lombok.experimental.Wither;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 
@@ -27,52 +28,64 @@ import java.util.stream.Collectors;
 
 @Data
 public class Model {
-    final RepositoryId id;
-    final String name;
-    final String description;
-    final UUID uuid;
-    final boolean isStronglyCoupled;
-    final boolean frozen;
-    List<ModelParameter> inputs;
-    List<ModelParameter> outputs;
+    @Wither
+    private final RepositoryId id;
+    private final String name;
+    private final String description;
+    private final UUID uuid;
+    private final boolean isStronglyCoupled;
+    private final boolean frozen;
+    @Wither
+    private final List<ModelParameter> inputs;
+    @Wither
+    private final List<ModelParameter> outputs;
+/*
+    public Model(RepositoryId modelId, String name, String description, UUID uuid, boolean isStronglyCoupled, boolean isFrozen)
+    {
+        this.id = modelId;
+        this.name = name;
+        this.description = description;
+        this.uuid = uuid;
+        this.isStronglyCoupled = isStronglyCoupled;
+        this.frozen = isFrozen;
+        this.inputs = Collections.emptyList();
+        this.outputs = Collections.emptyList();
 
+    }*/
     public JSONObject toJSON() {
         final JSONObject jsonObject = new JSONObject();
         jsonObject.put("id", this.id.toJSON());
-        jsonObject.put("title", this.getName());
-        jsonObject.put("uuid", this.getUuid().toString());
-        jsonObject.put("description", this.getDescription());
+        jsonObject.put("title", this.name);
+        jsonObject.put("uuid", this.uuid.toString());
+        jsonObject.put("description", this.description);
+        jsonObject.put("comment", "");
         jsonObject.put("frozen", this.frozen);
+        jsonObject.put("strongly_coupled", this.isStronglyCoupled);
 
-        /*
-        final JSONArray inPorts = new JSONArray();
-        this.inputs.forEach(input -> {
-            final JSONObject param = new JSONObject();
-            param.put("name", input.getName());
-            param.put("is_dynamic", input.isDynamic());
-            param.put("data_type", input.getDataType());
-            param.put("unit", input.getUnit());
-            param.put("description", input.getDescription());
-            param.put("defaultValue", input.getDefaultValue().orElse(null));
-            inPorts.add(param);
-        });
-        jsonObject.put("inPorts", inPorts);
-        final JSONArray outPorts = new JSONArray();
-        this.outputs.forEach(input -> {
-            final JSONObject param = new JSONObject();
-            param.put("name", input.getName());
-            param.put("is_dynamic", input.isDynamic());
-            param.put("data_type", input.getDataType());
-            param.put("unit", input.getUnit());
-            param.put("description", input.getDescription());
-            outPorts.add(param);
-        });
-        jsonObject.put("outPorts", outPorts);
-        */
         jsonObject.put("inPorts", listParamsToJson(this.inputs) );
         jsonObject.put("outPorts", listParamsToJson(this.outputs));
 
-        jsonObject.put("perspectives", null);
+        jsonObject.put("perspectives", this.perspectivesJson());
+        return jsonObject;
+    }
+
+    private JSONObject perspectivesJson() {
+        // TODO fill in the proper perspective values
+        final JSONObject jsonObject = new JSONObject();
+        jsonObject.put("Perspective I", "");
+        jsonObject.put("Perspective II", "");
+        jsonObject.put("Perspective III", "");
+        jsonObject.put("Perspective IV", "");
+        jsonObject.put("Perspective V", "");
+        jsonObject.put("Perspective VI", "");
+        jsonObject.put("Perspective VII", "");
+        jsonObject.put("Perspective VIII", "");
+        jsonObject.put("Perspective IX", "");
+        jsonObject.put("Perspective X", "");
+        jsonObject.put("Perspective XI", "");
+        jsonObject.put("Perspective XII", "");
+        jsonObject.put("Perspective XIII", "");
+
         return jsonObject;
     }
 

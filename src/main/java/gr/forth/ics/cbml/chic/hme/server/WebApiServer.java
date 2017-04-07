@@ -143,6 +143,25 @@ public class WebApiServer implements AutoCloseable {
         return fut;
     }
 
+    public CompletableFuture<JSONAware> postJsonAsync(final String url,
+                                                   final SAMLToken token,
+                                                   final JSONAware json) {
+        final AsyncHttpClient.BoundRequestBuilder builder = this.httpClient_.preparePost(url)
+                .addHeader("Content-type", "application/json")
+                .addHeader("Authorization", token.getHttpAuthzHeader());
+        builder.setBody(json.toJSONString());
+        System.err.println("========================");
+        System.err.println("SENDING:\n"+json.toJSONString());
+        System.err.println("========================");
+        final Request request = builder.build();
+
+        final CompletableFuture<JSONAware> fut = new CompletableFuture<>();
+        final Exception clientTrace = clientTrace();
+        exec.submit(() -> executeJSONRequest(request, fut, clientTrace));
+        return fut;
+    }
+
+
     public CompletableFuture<Element> postXMLAsync(final String url,
                                                    final SAMLToken token,
                                                    final String body) {
