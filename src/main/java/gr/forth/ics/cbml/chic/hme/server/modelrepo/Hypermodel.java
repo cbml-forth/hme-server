@@ -92,9 +92,10 @@ public class Hypermodel {
     public Model toModel()
     {
         assert this.publishedRepoId != null;
+        boolean isComposite = true;
         final Model model = new Model(this.publishedRepoId,
                 this.name, this.description,
-                this.uuid, this.isStronglyCoupled, this.isFrozen,
+                this.uuid, this.isStronglyCoupled, isComposite, this.isFrozen,
                 Collections.emptyList(), Collections.emptyList());
         return model;
 

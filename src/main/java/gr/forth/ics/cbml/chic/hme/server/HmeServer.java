@@ -44,6 +44,7 @@ import io.undertow.server.session.InMemorySessionManager;
 import io.undertow.server.session.SessionAttachmentHandler;
 import io.undertow.server.session.SessionCookieConfig;
 import io.undertow.util.*;
+import lombok.Value;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
 import net.minidev.json.parser.JSONParser;
@@ -115,14 +116,15 @@ public class HmeServer {
     static int svgToImage(Path inputSvgFile, Path outputSvgPath, int x, int y, int width, int height,
                           int q) {
 
-        String styles = "svg{background:white}" +
+        String styles = "svg{background:white;width:5000px;height:5000px}" +
                 ".connection-wrap{display:none}" +
                 ".marker-vertices{display:none}" +
                 ".link-tools{display:none}" +
                 ".marker-arrowheads{display:none}" +
                 "path.connection{fill:none}" +
                 ".port-label {display:none}" +
-                "text.label{display:none}";
+                "text.label{display:none}" +
+                "g.labels{display:none}";
 
         if (x < 0) {
             width += x;
@@ -145,7 +147,7 @@ public class HmeServer {
                 styles);
         processBuilder.inheritIO();
 
-        // System.err.println(processBuilder.command().stream().collect(Collectors.joining(" ")));
+        System.err.println(processBuilder.command().stream().collect(Collectors.joining(" ")));
 
         try {
             Process p = processBuilder.start();
@@ -507,7 +509,7 @@ public class HmeServer {
             sendNotFound(exchange, "Hypermodel not found!");
             return;
         }
-        Optional<String> actAsOpt = ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
+        Optional<String> actAsOpt = userId(exchange);
         if (!actAsOpt.isPresent()) {
             sendError(exchange, "Not authenticated", StatusCodes.UNAUTHORIZED);
             return;
@@ -674,7 +676,7 @@ public class HmeServer {
 
         ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
         ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.out::println);
-        Optional<String> actAs = ChicAccount.currentUser(exchange).map(_user -> "crafsrv");
+        Optional<String> actAs = userId(exchange);
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = // getAnnotationsOfModels(semanticStore);
         CompletableFuture.completedFuture(Collections.emptyList());
         tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
@@ -717,8 +719,7 @@ public class HmeServer {
         System.err.println("-> getAllModels");
 
         ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.err::println);
-        //Optional<String> actAs = ChicAccount.currentUser(exchange).map(u -> "crafsrv"); //XXX
-        Optional<String> actAs = ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
+        Optional<String> actAs = userId(exchange);
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore)
                 .exceptionally(ex -> {
                     log.error("Getting annotations ", ex);
@@ -726,8 +727,50 @@ public class HmeServer {
                     return Collections.<Map<String, String>>emptyList();
                 });
         final CompletableFuture<Map<UUID, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
-        tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
-                .thenCompose(modelRepository::getAllModels)
+        final CompletableFuture<Map<UUID, RepositoryId>> publishedHypermodelsFut = publishedHypermodels(db);
+        final CompletableFuture<List<Model>> allModels = tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
+                .thenCompose(modelRepository::getAllModels);
+
+        CompletableFuture.allOf(allModels, publishedHypermodelsFut, mapCompletableFuture, annotationsOfModels)
+                .thenApply(aVoid -> {
+                    final List<Model> models = allModels.join();
+                    final Map<UUID, RepositoryId> published = publishedHypermodelsFut.join();
+                    final Map<UUID, Integer> counts = mapCompletableFuture.join();
+                    final List<Map<String, String>> annotations = annotationsOfModels.join();
+
+                    final Map<String, List<Map<String, String>>> annsPerModel = annotations.stream().collect(Collectors.groupingBy(m -> m.get("uuid")));
+
+                    final List<JSONObject> jsonObjects = models.stream().map(model -> {
+                        final JSONObject json = model.toJSON();
+                        final UUID uuid = model.getUuid();
+                        final Integer usage = counts.getOrDefault(uuid, 0);
+                        json.put("usage", usage);
+                        if (published.containsKey(uuid)) {
+                            json.put("published_id", published.get(uuid).toJSON());
+                        }
+                        if (annsPerModel.containsKey(uuid.toString())) {
+                            final Map<String, String> m = annsPerModel.get(uuid.toString()).get(0);
+                            m.remove("uuid");
+                            final JSONObject persp = new JSONObject();
+                            m.forEach((k, v) -> {
+                                if (!"".equals(v)) {
+                                    final String[] strings = v.split(" ");
+                                    final JSONArray jsonArray = new JSONArray();
+                                    jsonArray.addAll(Arrays.asList(strings));
+                                    persp.put(k, jsonArray);
+                                }
+                            });
+                            json.put("perspectives", persp);
+                        } else
+                            json.put("perspectives", new JSONObject());
+                        return json;
+
+                    }).collect(Collectors.toList());
+                    final JSONArray array = new JSONArray();
+                    array.addAll(jsonObjects);
+                    return array;
+                })
+        /*
                 .thenCombine(mapCompletableFuture, (models, counts) -> models.stream().map(model -> {
                     final JSONObject json = model.toJSON();
                     final UUID uuid = model.getUuid();
@@ -760,7 +803,7 @@ public class HmeServer {
                     });
 
                     return a;
-                })
+                }) */
                 .handle((jsonArray, throwable) -> {
 
                     if (throwable != null)
@@ -1026,6 +1069,14 @@ public class HmeServer {
         exchange.getResponseSender().send(jsonObject.toJSONString(), IoCallback.END_EXCHANGE);
     }
 
+    @Value
+    static class ModelUsageInfo {
+        UUID model_uuid;
+        RepositoryId published_id;
+        int usage;
+        Optional<UUID> hypermodel_uuid;
+
+    }
     private static CompletableFuture<Map<UUID, Integer>> countHypermodelsPerModel(final Db db) {
         final String sql = "select model_uuid, count(*)::int4" +
                 " FROM hypermodel_versions_models JOIN recent_versions_vw USING (hypermodel_uid)" +
@@ -1037,6 +1088,21 @@ public class HmeServer {
                         final UUID model_uuid = UUID.fromString(r.getString(0));
                         final Integer cnt = r.getInt(1);
                         map.put(model_uuid, cnt);
+                    }
+                    return map;
+                });
+    }
+    private static CompletableFuture<Map<UUID, RepositoryId>> publishedHypermodels(final Db db) {
+        final String sql =
+                "SELECT hypermodel_uid::text AS model_uuid, repository_id" +
+                " FROM published_versions";
+        return DbUtils.queryDb(db, sql)
+                .thenApply(rs -> {
+                    final HashMap<UUID, RepositoryId> map = new HashMap<>();
+                    for (Row r : rs) {
+                        final UUID model_uuid = UUID.fromString(r.getString(0));
+                        final Long cnt = r.getLong(1);
+                        map.put(model_uuid, new RepositoryId(cnt));
                     }
                     return map;
                 });

@@ -397,7 +397,15 @@ public class WebApiServer implements AutoCloseable {
                                                  final SAMLToken token,
                                                  final Map<String, String> formEntries,
                                                  final Map<String, ByteBuffer> formData) {
-        final AsyncHttpClient.BoundRequestBuilder builder = this.httpClient_.preparePost(url)
+        return this.postForm(url, token, formEntries, formData, false);
+    }
+    public CompletableFuture<JSONAware> postForm(final String url,
+                                                 final SAMLToken token,
+                                                 final Map<String, String> formEntries,
+                                                 final Map<String, ByteBuffer> formData,
+                                                 boolean usePut) {
+        final AsyncHttpClient.BoundRequestBuilder builder =
+                (usePut ? this.httpClient_.preparePut(url) : this.httpClient_.preparePost(url))
                 .addHeader("Authorization", token.getHttpAuthzHeader());
 
         if (formData.isEmpty()) {

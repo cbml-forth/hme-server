@@ -144,7 +144,7 @@ public class ExecutionManager {
                     m.put("experiment_id", experimentId.toString());
                     m.put("experiment_uuid", experiment.uuid);
                     m.put("subject_out_id", subject_out_id);
-                    log.info("Ready to send to VPH-HF Director... experiment id={}",experimentId);
+                    log.info("Ready to send to VPH-HF Director... experiment id={} inputs={}",experimentId, m);
                     return execFramework.submitWorkflow(m, execToken);
                 })
                 // 4. Start the workflow
@@ -154,7 +154,7 @@ public class ExecutionManager {
                 })
                 .thenApply(workflowStatus -> {
                     experiment.workflow_uuid = workflowStatus.getWorkflowUuid();
-                    experiment.status = Experiment.EXP_RUN_STATE.fromString(workflowStatus.getStatus()); //XXX: Check with Simone!!
+                    experiment.status = workflowStatus.getStatus();
                     return experiment;
                 });
 

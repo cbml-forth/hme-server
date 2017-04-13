@@ -34,6 +34,7 @@ public class Model {
     private final String description;
     private final UUID uuid;
     private final boolean isStronglyCoupled;
+    private final boolean composite;
     private final boolean frozen;
     @Wither
     private final List<ModelParameter> inputs;
@@ -59,6 +60,7 @@ public class Model {
         jsonObject.put("uuid", this.uuid.toString());
         jsonObject.put("description", this.description);
         jsonObject.put("comment", "");
+        jsonObject.put("is_composite", this.composite);
         jsonObject.put("frozen", this.frozen);
         jsonObject.put("strongly_coupled", this.isStronglyCoupled);
 

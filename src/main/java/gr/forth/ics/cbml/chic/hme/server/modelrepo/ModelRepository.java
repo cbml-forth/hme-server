@@ -204,13 +204,14 @@ public class ModelRepository implements AutoCloseable {
     private static Model parseModelJson(RepositoryId modelId, JSONObject modelJson) {
         final String name = modelJson.getAsString("title");
         final String description = modelJson.getAsString("description");
-        System.err.printf("== %s UUID = %s\n", modelId, modelJson.getAsString("uuid"));
+        // System.err.printf("== %s UUID = %s\n", modelId, modelJson.getAsString("uuid"));
         final UUID uuid = UUID.fromString(modelJson.getAsString("uuid"));
         final Number strongly_coupled = modelJson.getAsNumber("strongly_coupled");
         final Number isFrozenNum = modelJson.getAsNumber("freezed");
+        final Boolean isComposite = (Boolean) modelJson.getOrDefault("is_composite", Boolean.FALSE);
         final boolean isStronglyCoupled = strongly_coupled != null && strongly_coupled.intValue() != 0;
         final boolean isFrozen = isFrozenNum != null && isFrozenNum.intValue() != 0;
-        return new Model(modelId, name, description, uuid, isStronglyCoupled, isFrozen, Collections.emptyList(), Collections.emptyList());
+        return new Model(modelId, name, description, uuid, isStronglyCoupled,isComposite, isFrozen, Collections.emptyList(), Collections.emptyList());
     }
 
 
@@ -258,10 +259,10 @@ public class ModelRepository implements AutoCloseable {
                 .thenCompose(token ->
                         this.storeHyperModelAsTool2(completeModel, token)
                                 .thenCompose(model -> {
-                                    final WorkflowKind kind = hypermodel.kind();
+                                    final WorkflowKind kind = WorkflowKind.XMML;
                                     //String fileTitle = String.valueOf((title + " (" + version + ")." + kind).hashCode());
                                     String fileTitle = "a" + UUID.randomUUID().toString() + "_" + hypermodel.getVersion() + "." + kind;
-                                    return this.storeWorkflowDescriptionForModel(model, fileTitle, kind, workflowDescription, token);
+                                    return this.putWorkflowDescriptionForModel(model, fileTitle, kind, workflowDescription, token);
                                     //return model;
                                 }));
     }
@@ -321,7 +322,50 @@ public class ModelRepository implements AutoCloseable {
                 });
 
     }
+    CompletableFuture<Model> putWorkflowDescriptionForModel(Model model,
+                                                              String title,
+                                                              WorkflowKind kind,
+                                                              String workflowDescription,
+                                                              SAMLToken token) {
+        /*
+        updateFile is a PUT HTTP method used for storing or updating a new file (attachment and its metadata).
+         This file should be always associated with a model/tool.
+         updateFile method accepts 9 input parameters which should all be passed through request body.
+          Encoding: multipart/form-data.
+         The input parameters of the web service are the following:
+               file  : Required (The actual file (blob))
+               tool_id  : Required (link to the model/tool)
+               title  : Required (title of the file.)
+               description : Not required (description of the file)
+               kind  : Required (type of the file (document, source code, muscle configuration file, t2flow, compressed package with binary and dependencies, xmml description))
+               license  : Not required. (license regarding this file)
+               sha1sum  : Not required. (sha1sum of this file)
+               comment  : Not required. (comments on this file)
+               engine  : Not required. (engine suitable for running this file)
+          The JSON object returned by method updateFile has one key, named id, and one value which is associated with this key.
+        */
 
+        final String url = BASE_URI + "updateFile/";
+        Map<String, String> m = new HashMap<>();
+        final String toolId = model.getId().toString();
+        m.put("tool_id", toolId);
+        m.put("title", title);
+        m.put("kind", kind.toFileKind());
+        m.put("description", "Workflow description for this hypermodel");
+        m.put("comment", "Uploaded by HME©");
+
+        Map<String, ByteBuffer> data = new HashMap<>();
+        data.put("file", ByteBuffer.wrap(workflowDescription.getBytes(Charset.defaultCharset())));
+        return this.apiServer.postForm(url, token, m, data, true)
+                .thenApply(JSONObject.class::cast)
+                .thenApply(jsonObject -> {
+                    final String id = jsonObject.getAsString("id");
+                    log.info("Workflow description of tool id = {} stored as file id = {}", toolId, id);
+                    return id;
+                })
+                .thenApply(id -> model);
+
+    }
     CompletableFuture<Model> storeWorkflowDescriptionForModel(Model model,
                                                               String title,
                                                               WorkflowKind kind,

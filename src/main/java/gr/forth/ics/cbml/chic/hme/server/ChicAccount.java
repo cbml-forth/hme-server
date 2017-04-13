@@ -73,7 +73,8 @@ public final class ChicAccount {
             new HashMap<String, String>() {
                 {
                     put("urn:oid:0.9.2342.19200300.100.1.1", "rfc2798_uid");
-                    put("urn:custodix:ciam:1.0:principal:uuid", "uid");
+                    put("urn:custodix:ciam:1.0:principal:uid", "uid");
+                    put("urn:custodix:ciam:1.0:principal:uuid", "uuid");
                     put("urn:custodix:ciam:1.0:domain:name", "domain");
                     put("urn:custodix:ciam:1.0:domain:uuid", "domainUuid");
                     put("urn:oid:0.9.2342.19200300.100.1.3", "email");
@@ -97,11 +98,13 @@ public final class ChicAccount {
             };
 
     String getUserId() {
-        if (attributes.containsKey("uid"))
-            return attributes.get("uid");
+        if (attributes.containsKey("uuid"))
+            return attributes.get("uuid");
         return attributes.getOrDefault("rfc2798_uid", "");
     }
     String getUsername() {
+        if (attributes.containsKey("uid"))
+            return attributes.get("uid");
         return attributes.getOrDefault("rfc2798_uid", "");
     }
 

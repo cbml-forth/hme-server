@@ -194,6 +194,11 @@ public class SAMLToken {
             return assertions.get("urn:custodix:ciam:1.0:principal:uuid");
         return assertions.getOrDefault("urn:oid:0.9.2342.19200300.100.1.1", "");
     }
+    public String getUserName() {
+        if (assertions.containsKey("urn:custodix:ciam:1.0:principal:uid"))
+            return assertions.get("urn:custodix:ciam:1.0:principal:uid");
+        return assertions.getOrDefault("urn:oid:0.9.2342.19200300.100.1.1", "");
+    }
 
 
     public Instant getExpirationDate() {

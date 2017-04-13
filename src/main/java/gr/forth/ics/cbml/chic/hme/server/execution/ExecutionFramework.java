@@ -91,9 +91,37 @@ public class ExecutionFramework implements AutoCloseable {
 
     @Value
     public static class WorkflowStatus {
-        @Wither String status;
-        String workflowId;
-        UUID workflowUuid;
+        final String workflowId;
+        final UUID workflowUuid;
+        @Wither
+        final Experiment.EXP_RUN_STATE status;
+
+        public WorkflowStatus(String id, UUID uuid)
+        {
+            this(id, uuid, Experiment.EXP_RUN_STATE.NOT_STARTED);
+        }
+        public WorkflowStatus(String id, UUID uuid, Experiment.EXP_RUN_STATE status)
+        {
+            this.workflowId = id;
+            this.workflowUuid = uuid;
+            this.status = status;
+        }
+
+
+        WorkflowStatus withTavernaStatus(final String status)
+        {
+            // See http://dev.mygrid.org.uk/wiki/display/tav250/REST+API#RESTAPI-Resource:/runs/{id}/status
+            // for the possible values of Status :
+            // "Initialized" or "Operating" or "Stopped" or "Finished"
+            Experiment.EXP_RUN_STATE run_state;
+            switch (status) {
+                case "Finished": run_state = Experiment.EXP_RUN_STATE.FINISHED_OK; break;
+                case "Stopped": run_state = Experiment.EXP_RUN_STATE.FINISHED_FAIL; break;
+                default: run_state = Experiment.EXP_RUN_STATE.RUNNING; break;
+            }
+            WorkflowStatus clone = new WorkflowStatus(this.workflowId, this.workflowUuid, run_state);
+            return clone;
+        }
     }
 
     public CompletableFuture<WorkflowStatus> startWorkflow(final WorkflowStatus w, final SAMLToken token) {
@@ -104,7 +132,9 @@ public class ExecutionFramework implements AutoCloseable {
                 .thenApply(JSONObject.class::cast)
                 .thenApply(jsonObject -> {
                     String status = jsonObject.getAsString("workflow_status");
-                    return w.withStatus(status);
+                    final WorkflowStatus withStatus = w.withTavernaStatus(status);
+                    log.info("WORKFLOW STARTED : {}", withStatus);
+                    return withStatus;
                 });
     }
 
@@ -120,14 +150,14 @@ public class ExecutionFramework implements AutoCloseable {
                 .thenApply(JSONObject.class::cast)
                 .handle((js, ex) -> {
                     if (ex != null) {
-                        ex.printStackTrace();
+                        log.error("Submit workflow", ex);
                         return null;
 
                     }
+                    System.err.println(js.toJSONString());
                     UUID workflow_uuid = UUID.fromString(js.getAsString("workflow_id"));
-                    String workflow_status = js.getAsString("workflow_status");
                     String workflow_id = js.getAsString("id");
-                    return new WorkflowStatus(workflow_status, workflow_id, workflow_uuid);
+                    return new WorkflowStatus(workflow_id, workflow_uuid);
                 });
     }
 }
