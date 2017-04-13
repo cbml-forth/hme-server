@@ -346,6 +346,8 @@ public class HmeServer {
 
     public static void main(String[] args) throws IOException {
 
+        System.setProperty ("jsse.enableSNIExtension", "false");
+
         final HmeServerConfig serverConfig = ConfigFactory.create(HmeServerConfig.class);
 
         HmeServer.config = serverConfig;
@@ -566,15 +568,15 @@ public class HmeServer {
                     final RepositoryId experimentId = experiment.getId();
                     final Experiment.EXP_RUN_STATE status = experiment.getStatus();
                     final String jsonString = experiment.toJson().toJSONString();
+                    exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getResponseSender().send(jsonString, IoCallback.END_EXCHANGE);
+
                     DbUtils.queryDb(database,
                             "INSERT INTO experiments(experiment_id,hypermodel_uid,hypermodel_version,status,data)" +
                                     " VALUES($1,$2,$3,$4,$5)",
                             Arrays.asList(experimentId.getId(), hypermodel.getUuid(), hypermodel.getVersion(), status.toString(), jsonString));
 
 
-                    JSONObject js = experiment.toJson();
-                    exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
-                    exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
                 });
     }
 

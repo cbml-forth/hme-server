@@ -5,9 +5,9 @@ import net.minidev.json.JSONObject;
 
 @Value
 public class RepositoryId {
-    long id;
+    final public long id;
 
-    public Number toJSON()
+    public long toJSON()
     {
         return this.id;
     }

@@ -177,7 +177,8 @@ public class Experiment {
     public JSONObject toJson() {
         final Experiment experiment = this;
         JSONObject js = new JSONObject();
-        js.put("id", experiment.id.toJSON());
+        final long id = experiment.id.id;
+        js.put("id", id);
         js.put("uuid", experiment.uuid);
         js.put("workflow_uuid", experiment.workflow_uuid);
         js.put("user_uid", experiment.user_uuid);
