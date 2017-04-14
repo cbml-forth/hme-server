@@ -59,6 +59,7 @@ public class Observables implements AutoCloseable {
                     try {
                         o = (JSONObject) p.parse(row.getString(0));
                         o.put("status", status.toString());
+                        o.put("event_id", message.getId());
                     } catch (ParseException e) {}
                     return o;
                 })

@@ -44,6 +44,7 @@ CREATE INDEX published_versions_hypermodel_version ON published_versions(hypermo
 
 CREATE TABLE experiments (
   experiment_id INTEGER PRIMARY KEY, -- The Repository's ID
+  experiment_uid UUID NOT NULL,
   hypermodel_uid UUID NOT NULL REFERENCES hypermodels(hypermodel_uid) ON DELETE CASCADE,
   hypermodel_version BIGINT NOT NULL REFERENCES hypermodel_versions(hypermodel_version) ON DELETE CASCADE,
   workflow_uuid UUID NOT NULL,

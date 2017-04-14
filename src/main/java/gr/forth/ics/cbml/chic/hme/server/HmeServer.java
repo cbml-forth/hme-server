@@ -451,7 +451,7 @@ public class HmeServer {
 
                 // server-sent events, real time monitoring (e.g. for hypermodels execution status)
                 .addExactPath("/sse", new PredicateHandler(authnPredicate,
-                        exchange -> exchange.dispatch(() -> monitor(exchange, queueListener.observables())),
+                        exchange -> exchange.dispatch(() -> monitor(exchange, queueListener.observables(), database)),
                         HmeServer::apiError401))
 
                 .addExactPath("/login", SecurityHandler.build(loginHandler, samlConfig, "SAML2Client"))
@@ -566,15 +566,16 @@ public class HmeServer {
                     final Hypermodel hypermodel = tuple2.v1();
                     final Experiment experiment = tuple2.v2();
                     final RepositoryId experimentId = experiment.getId();
+                    final String experimentUuid = experiment.getUuid();
                     final Experiment.EXP_RUN_STATE status = experiment.getStatus();
                     final String jsonString = experiment.toJson().toJSONString();
                     exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send(jsonString, IoCallback.END_EXCHANGE);
 
                     DbUtils.queryDb(database,
-                            "INSERT INTO experiments(experiment_id,hypermodel_uid,hypermodel_version,workflow_uuid, status,data)" +
-                                    " VALUES($1,$2,$3,$4,$5,$6)",
-                            Arrays.asList(experimentId.getId(), hypermodel.getUuid(),
+                            "INSERT INTO experiments(experiment_id,experiment_uid,hypermodel_uid,hypermodel_version,workflow_uuid, status,data)" +
+                                    " VALUES($1,$2,$3,$4,$5,$6, $7)",
+                            Arrays.asList(experimentId.getId(), experimentUuid, hypermodel.getUuid(),
                                     hypermodel.getVersion(), experiment.getWorkflow_uuid(),
                                     status.toString(), jsonString));
 
@@ -1273,15 +1274,21 @@ public class HmeServer {
 
 
 
-    static void monitor(HttpServerExchange exchange, Observables observables) {
+    static void monitor(HttpServerExchange exchange, Observables observables, Db db) {
         final String userId = ChicAccount.currentUser(exchange).map(ChicAccount::getUserId).get();
+
+        long lastEventId = -1L;
+        final HeaderValues lastEventHdr = exchange.getRequestHeaders().get("Last-Event-ID");
+        if (lastEventHdr != null && !lastEventHdr.isEmpty()) {
+            lastEventId = Long.parseLong(lastEventHdr.getFirst());
+        }
 
         System.out.printf("[%s] monitor_experiment\n", userId);
         try {
             exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");
             // For proxying by nginx (https://www.nginx.com/resources/wiki/start/topics/examples/x-accel/#x-accel-buffering):
             exchange.getResponseHeaders().put(HttpString.tryFromString("X-Accel-Buffering"), "no");
-            new ServerSentEventHandler(new MonitorConnectionHandler(userId, observables.executionMessages()))
+            new ServerSentEventHandler(new MonitorConnectionHandler(userId, observables.executionMessages(), lastEventId, db))
                     .handleRequest(exchange);
         } catch (Exception e) {
             e.printStackTrace();

@@ -118,6 +118,7 @@ public class MessageQueueListener implements AutoCloseable{
                                     // When the Event/Message has been safely handled
                                     // acknowledge its receipt...
                                     myChannel.basicAck(deliveryTag, multipleAck);
+                                    log.info("BasicAck-ed {}", deliveryTag);
                                     this.publisher.publish(msg);
                                 }
                                 else {
@@ -138,19 +139,24 @@ public class MessageQueueListener implements AutoCloseable{
         private CompletableFuture<Message> saveMessage(Messages.Message msg)
         {
 
-            final String aggregate_type = msg.toExecutionStatus().isPresent() ? "experiment" : "model";
-            final UUID uuid = msg.toExecutionStatus().isPresent() ? msg.toExecutionStatus().get().getWorkflowUUID()
+            final boolean isExecutionMsg = msg.toExecutionStatus().isPresent();
+            final String aggregate_type = isExecutionMsg ? "experiment" : "model";
+            final UUID uuid = isExecutionMsg ? msg.toExecutionStatus().get().getWorkflowUUID()
                     : msg.toModelsChange().get().getModelUUID();
             final String event_type = msg.eventType();
             final String jsonData = msg.toJson().toJSONString();
 
-            return DbUtils.queryDb(db,
+            final String sql = isExecutionMsg ?
                     "INSERT INTO events(event_type,aggregate_type,aggregate_uuid,data)" +
-                            " VALUES($1,$2,$3,$4) RETURNING event_id",
+                            " SELECT $1,$2,experiment_uid, $4 FROM experiments WHERE workflow_uuid=$3" +
+                            " RETURNING event_id"
+                    : "INSERT INTO events(event_type,aggregate_type,aggregate_uuid,data)" +
+                    " VALUES($1,$2,$3,$4) RETURNING event_id";
+            return DbUtils.queryDb(db, sql,
                     Arrays.asList(event_type, aggregate_type, uuid, jsonData))
                     .thenApply(resultSet -> {
                         final Row row = resultSet.row(0);
-                        final Long eventId = row.getLong("event_id");
+                        final Long eventId = row.getLong(0);
                         msg.setId(eventId);
                         return msg;
                     });
