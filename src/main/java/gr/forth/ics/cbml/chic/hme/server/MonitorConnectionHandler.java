@@ -3,6 +3,7 @@ package gr.forth.ics.cbml.chic.hme.server;
 import gr.forth.ics.cbml.chic.hme.server.mq.Messages;
 import io.undertow.server.handlers.sse.ServerSentEventConnection;
 import io.undertow.server.handlers.sse.ServerSentEventConnectionCallback;
+import net.minidev.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xnio.IoUtils;
@@ -15,14 +16,14 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
             LoggerFactory.getLogger(MonitorConnectionHandler.class);
 
     private final String userId;
-    private final Observable<Messages.ExecutionStatusMessage> observable;
+    private final Observable<JSONObject> observable;
 
     private ServerSentEventConnection sseConn;
     private Subscription subscription;
 
 
     public MonitorConnectionHandler(final String userId,
-                                    final Observable<Messages.ExecutionStatusMessage> observable) {
+                                    final Observable<JSONObject> observable) {
         this.userId = userId;
         this.observable = observable;
     }
@@ -42,8 +43,9 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
         log.info("START MONITORING FOR USER {}", userId);
 
         this.subscription = observable
-                .map(Messages.Message::toJson)
+                //.map(Messages.Message::toJson)
                 .observeOn(Schedulers.io())
+                .filter(jsonObject -> userId.equals(jsonObject.getAsString("user_uid")))
                 .subscribe(jsonObject -> {
                             log.info("SSE: {}", jsonObject);
                             sseConn.send(jsonObject.toJSONString(), "execution", jsonObject.getAsString("id"), null);

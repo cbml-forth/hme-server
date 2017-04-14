@@ -180,7 +180,7 @@ public class Experiment {
         final long id = experiment.id.id;
         js.put("id", id);
         js.put("uuid", experiment.uuid);
-        js.put("workflow_uuid", experiment.workflow_uuid);
+        js.put("workflow_uuid", experiment.workflow_uuid.toString());
         js.put("user_uid", experiment.user_uuid);
         js.put("patient_pseudoid", experiment.getPatientPseudonym());
         js.put("description", experiment.description);

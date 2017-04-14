@@ -56,7 +56,7 @@ public class MessageQueueListener implements AutoCloseable{
         factory.setRequestedHeartbeat(60); // 1 min
         factory.setConnectionTimeout(5000); // 5 secs
 
-        this.publisher = new Observables();
+        this.publisher = new Observables(db);
 
         this.AMQP_URI = String.format("amqp://%s:%s@%s:%d/%s",
                 config.amqpUser(),

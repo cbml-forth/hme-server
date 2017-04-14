@@ -572,9 +572,11 @@ public class HmeServer {
                     exchange.getResponseSender().send(jsonString, IoCallback.END_EXCHANGE);
 
                     DbUtils.queryDb(database,
-                            "INSERT INTO experiments(experiment_id,hypermodel_uid,hypermodel_version,status,data)" +
-                                    " VALUES($1,$2,$3,$4,$5)",
-                            Arrays.asList(experimentId.getId(), hypermodel.getUuid(), hypermodel.getVersion(), status.toString(), jsonString));
+                            "INSERT INTO experiments(experiment_id,hypermodel_uid,hypermodel_version,workflow_uuid, status,data)" +
+                                    " VALUES($1,$2,$3,$4,$5,$6)",
+                            Arrays.asList(experimentId.getId(), hypermodel.getUuid(),
+                                    hypermodel.getVersion(), experiment.getWorkflow_uuid(),
+                                    status.toString(), jsonString));
 
 
                 });
@@ -1272,7 +1274,8 @@ public class HmeServer {
 
 
     static void monitor(HttpServerExchange exchange, Observables observables) {
-        final String userId = userId(exchange).get();
+        final String userId = ChicAccount.currentUser(exchange).map(ChicAccount::getUserId).get();
+
         System.out.printf("[%s] monitor_experiment\n", userId);
         try {
             exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");

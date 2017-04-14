@@ -46,10 +46,13 @@ CREATE TABLE experiments (
   experiment_id INTEGER PRIMARY KEY, -- The Repository's ID
   hypermodel_uid UUID NOT NULL REFERENCES hypermodels(hypermodel_uid) ON DELETE CASCADE,
   hypermodel_version BIGINT NOT NULL REFERENCES hypermodel_versions(hypermodel_version) ON DELETE CASCADE,
+  workflow_uuid UUID NOT NULL,
   status TEXT NOT NULL,
   data JSONB NOT NULL,
   inserted_at TIMESTAMP(6) NOT NULL DEFAULT statement_timestamp()
 );
+CREATE INDEX experiments_workflow_uuid ON experiments(workflow_uuid);
+
 
 
 CREATE TABLE events (
