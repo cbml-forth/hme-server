@@ -45,16 +45,16 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
             return Observable.empty();
 
         return db.queryRows(
-                "SELECT event_id::TEXT, experiments.data::text " +
+                "SELECT event_id, experiments.data::text " +
                         " FROM events JOIN experiments ON (experiment_uid=aggregate_uuid)" +
                         " WHERE event_id>$1 ORDER BY event_id ASC", lastEventId)
                 .map(row -> {
                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
                     JSONObject o = null;
                     try {
-                        final String event_id = row.getString(0);
-                        o = (JSONObject) p.parse(row.getString(1));
-                        o.put("event_id", Long.parseLong(event_id));
+                        final long event_id = row.getLong("event_id");
+                        o = (JSONObject) p.parse(row.getString("data"));
+                        o.put("event_id", event_id);
                     } catch (ParseException e) {}
                     return o;
                 })
@@ -66,7 +66,7 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
     public void connected(ServerSentEventConnection sseConn,
                           String s) {
         this.sseConn = sseConn;
-        this.sseConn.setKeepAliveTime(10_000);
+        // this.sseConn.setKeepAliveTime(10_000);
         sseConn.addCloseTask(serverSentEventConnection -> {
             log.info("closing sse conn for user {}", userId);
             if (this.subscription != null)

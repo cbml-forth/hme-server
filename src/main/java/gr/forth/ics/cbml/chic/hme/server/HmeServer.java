@@ -555,7 +555,8 @@ public class HmeServer {
                 .thenCompose(hypermodel -> {
                     final RepositoryId repoId = hypermodel.getPublishedRepoId().get();
                     System.err.println("--> Running " + repoId);
-                    return executionManager.runHypermodel(repoId, "dfsfs", "dsf", inputs, actAs)
+                    final String experimentDescription = String.format("Test execution of '%s' through HME", hypermodel.getName());
+                    return executionManager.runHypermodel(repoId, experimentDescription, "", inputs, actAs)
                             .thenApply(experiment -> Tuple.tuple(hypermodel, experiment));
                 })
                 .whenComplete((tuple2, ex) -> {

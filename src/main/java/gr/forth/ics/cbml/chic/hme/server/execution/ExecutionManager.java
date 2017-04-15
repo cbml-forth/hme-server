@@ -155,6 +155,7 @@ public class ExecutionManager {
                 .thenApply(workflowStatus -> {
                     experiment.workflow_uuid = workflowStatus.getWorkflowUuid();
                     experiment.status = workflowStatus.getStatus();
+                    log.info("Experiment: {}", experiment);
                     return experiment;
                 });
 

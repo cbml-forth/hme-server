@@ -1,8 +1,6 @@
 package gr.forth.ics.cbml.chic.hme.server.mq;
 
 import com.github.pgasync.Db;
-import com.github.pgasync.Row;
-import gr.forth.ics.cbml.chic.hme.server.execution.Experiment;
 import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONObject;
 import net.minidev.json.parser.JSONParser;
@@ -11,7 +9,6 @@ import rx.Observable;
 import rx.observables.ConnectableObservable;
 import rx.subjects.PublishSubject;
 
-import java.util.Arrays;
 import java.util.Objects;
 import java.util.UUID;
 
@@ -36,7 +33,7 @@ public class Observables implements AutoCloseable {
         this.executionMessages = observable
                 .filter(msg -> msg.toExecutionStatus().isPresent())
                 .map(msg -> msg.toExecutionStatus().get())
-                .flatMap(this::updateAndReturnExperiment)
+                .flatMap(this::getUpdatedExperiment)
                 // share is important here so the DB queries to get the corresponding
                 // experiment are not performed multiple times, once for each Subscriber
                 // Cf. http://blog.danlew.net/2016/06/13/multicasting-in-rxjava/
@@ -45,20 +42,19 @@ public class Observables implements AutoCloseable {
         this.executionMessages.subscribe(msg -> log.info("--- " + msg));
     }
 
-    private Observable<JSONObject> updateAndReturnExperiment(Messages.ExecutionStatusMessage message) {
+    private Observable<JSONObject> getUpdatedExperiment(final Messages.ExecutionStatusMessage message) {
+        // The experiment row in the 'experiments' table
+        // should have been already updated by the PostgreSQL trigger
+        // So we just retrieve the corresponding row:
         final UUID workflowUUID = message.getWorkflowUUID();
-        final Experiment.EXP_RUN_STATE status = message.getStatus();
-        log.info("Updating Experiment {} to be {}", workflowUUID, status);
         return db.queryRows(
-                "UPDATE experiments SET status=$1 WHERE workflow_uuid=$2" +
-                        " RETURNING data::text", status.toString(), workflowUUID)
-                .doOnError(throwable -> log.info("updating experiment ", throwable))
+                "SELECT data::text FROM experiments WHERE workflow_uuid=$1",workflowUUID)
+                .doOnError(throwable -> log.info("getting experiment after event", throwable))
                 .map(row -> {
                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
                     JSONObject o = null;
                     try {
                         o = (JSONObject) p.parse(row.getString(0));
-                        o.put("status", status.toString());
                         o.put("event_id", message.getId());
                     } catch (ParseException e) {}
                     return o;

@@ -123,3 +123,20 @@ LANGUAGE plpgsql ;
 CREATE TRIGGER trig_refresh_hypermodel_versions_models
 AFTER INSERT ON hypermodel_versions
     FOR EACH ROW EXECUTE PROCEDURE create_trig_refresh_hypermodel_versions_models();
+
+
+CREATE OR REPLACE FUNCTION create_trig_update_experiment_status() RETURNS trigger AS
+$$
+BEGIN
+    UPDATE experiments
+    SET status=NEW.data->>'status', data=jsonb_set(data, '{status}', NEW.data->'status', false)
+    WHERE NEW.aggregate_uuid=experiments.experiment_uid AND NEW.event_type='experiment.change';
+    RETURN NULL;
+END;
+$$
+LANGUAGE plpgsql ;
+
+
+CREATE TRIGGER trig_update_experiment_status
+AFTER INSERT OR UPDATE ON events
+    FOR EACH ROW EXECUTE PROCEDURE create_trig_update_experiment_status();

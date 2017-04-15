@@ -156,7 +156,7 @@ public class MessageQueueListener implements AutoCloseable{
                     Arrays.asList(event_type, aggregate_type, uuid, jsonData))
                     .thenApply(resultSet -> {
                         final Row row = resultSet.row(0);
-                        final Long eventId = row.getLong(0);
+                        final long eventId = row.getLong(0);
                         msg.setId(eventId);
                         return msg;
                     });
