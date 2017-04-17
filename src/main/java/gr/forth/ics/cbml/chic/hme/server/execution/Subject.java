@@ -1,5 +1,8 @@
 package gr.forth.ics.cbml.chic.hme.server.execution;
 
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.RepositoryId;
+import org.apache.regexp.RE;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -8,7 +11,7 @@ import java.util.List;
  */
 
 public class Subject {
-    private final String id;
+    private final RepositoryId id;
     private final String description;
     private String external_id;
     private List<TrFile> files;
@@ -18,11 +21,11 @@ public class Subject {
     }
     public void addFile(final TrFile file) { this.files.add(file);}
 
-    public Subject(final String id) {
+    public Subject(final RepositoryId id) {
         this(id, null);
     }
 
-    public Subject(final String id, final String description) {
+    public Subject(final RepositoryId id, final String description) {
         this.id = id;
         this.description = description;
         this.external_id = "";
@@ -36,7 +39,7 @@ public class Subject {
         this.external_id = external_id;
     }
 
-    public String getId() {
+    public RepositoryId getId() {
         return id;
     }
 

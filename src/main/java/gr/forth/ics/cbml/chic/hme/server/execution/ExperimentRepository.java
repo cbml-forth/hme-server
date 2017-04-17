@@ -115,19 +115,20 @@ public class ExperimentRepository implements AutoCloseable {
         form.put("subject_external_id", subject_external_id);
 
         return this.apiServer.postForm(API_BASE_URI + "storeSubject/", token, form)
+                .thenApply(JSONObject.class::cast)
                 .thenApply(jsonObject -> {
-                    final Subject subject = new Subject(((JSONObject) jsonObject).getAsString("id"), description);
+                    final Subject subject = new Subject(RepositoryId.fromJsonObj(jsonObject,"id"), description);
                     subject.setExternalId(subject_external_id);
                     return subject;
                 });
 
     }
 
-    public CompletableFuture<String> addFileToSubject(final String subject_id, final String title,
+    public CompletableFuture<String> addFileToSubject(final RepositoryId subject_id, final String title,
                                                       final String kind, final ByteBuffer b,
                                                       final SAMLToken token) {
         HashMap<String, String> form = new HashMap<>();
-        form.put("subject_id", subject_id);
+        form.put("subject_id", subject_id.toString());
         form.put("title", title);
         form.put("kind", kind);
         form.put("version", "1.0");
@@ -141,20 +142,20 @@ public class ExperimentRepository implements AutoCloseable {
         return API_BASE_URI.resolve("getTrFileById/?id=" + file_id).toString();
     }
 
-    public CompletableFuture<Void> downloadFile(final String file_id,
+    public CompletableFuture<Void> downloadFile(final RepositoryId file_id,
                                                 final OutputStream whereToSave,
                                                 final SAMLToken token) {
 
         return this.apiServer.downloadContent(API_BASE_URI + "getTrFileById/", token,
-                Collections.singletonMap("id", file_id),
+                Collections.singletonMap("id", file_id.toString()),
                 whereToSave);
     }
 
-    public CompletableFuture<Subject> getSubject(final SAMLToken token, final String subjectId) {
+    public CompletableFuture<Subject> getSubject(final SAMLToken token, final RepositoryId subjectId) {
         final CompletableFuture<List<TrFile>> fileIdsFut = getFilesOfSubject(token, subjectId);
-        return this.apiServer.getJsonAsync(API_BASE_URI + "getSubjectById/", token, Collections.singletonMap("id", subjectId))
-                .thenApply(jsonAware -> {
-                    JSONObject jsonObject = (JSONObject) jsonAware;
+        return this.apiServer.getJsonAsync(API_BASE_URI + "getSubjectById/", token, Collections.singletonMap("id", ""+subjectId.getId()))
+                .thenApply(JSONObject.class::cast)
+                .thenApply(jsonObject -> {
                     final Subject subject = new Subject(subjectId, jsonObject.getAsString("description"));
                     subject.setExternalId(jsonObject.getAsString("subject_external_id"));
                     return subject;
@@ -166,11 +167,11 @@ public class ExperimentRepository implements AutoCloseable {
     }
 
 
-    private CompletableFuture<List<TrFile>> getFilesOfSubject(final SAMLToken token, String subjectId) {
-        return this.apiServer.getJsonAsync(API_BASE_URI + "getTrFilesBySubjectId/", token, Collections.singletonMap("id", subjectId))
+    public CompletableFuture<List<TrFile>> getFilesOfSubject(final SAMLToken token, RepositoryId subjectId) {
+        return this.apiServer.getJsonAsync(API_BASE_URI + "getTrFilesBySubjectId/", token, Collections.singletonMap("id", ""+subjectId.getId()))
                 .thenApply(js -> ((JSONObject) js).values().stream()
                         .map(JSONObject.class::cast)
-                        .map(v -> new TrFile(v.getAsString("id"), v.getAsString("kind"),
+                        .map(v -> new TrFile(RepositoryId.fromJsonObj(v, "id"), v.getAsString("kind"),
                                 DatatypeConverter.parseDateTime(v.getAsString("created_on")).toInstant()))
                         .sorted(Comparator.comparing(TrFile::getCreatedOn).reversed())
                         .collect(Collectors.toList()));
@@ -179,14 +180,14 @@ public class ExperimentRepository implements AutoCloseable {
 
     private CompletableFuture<Experiment> createNewExperimentImpl(final Trial trial,
                                                                   final String description,
-                                                                  final String subject_id_in,
-                                                                  final String subject_id_out,
+                                                                  final RepositoryId subject_id_in,
+                                                                  final RepositoryId subject_id_out,
                                                                   final SAMLToken token) {
         HashMap<String, String> form = new HashMap<>();
         form.put("trial_id", trial.id.getId()+"");
         form.put("description", description);
-        form.put("subject_id_in", subject_id_in);
-        form.put("subject_id_out", subject_id_out);
+        form.put("subject_id_in", subject_id_in.getId()+"");
+        form.put("subject_id_out", subject_id_out.getId() + "");
         form.put("status", "NOT_STARTED");
 
         if (log.isInfoEnabled()) {
@@ -280,8 +281,8 @@ public class ExperimentRepository implements AutoCloseable {
                     }
 
                     exp.trial = new Trial(RepositoryId.fromJsonObj(jsonExp, "trial_id"));
-                    exp.setSubjectIn(new Subject(jsonExp.getAsString("subject_id_in")));
-                    exp.setSubjectOut(new Subject(jsonExp.getAsString("subject_id_out")));
+                    exp.setSubjectIn(new Subject(RepositoryId.fromJsonObj(jsonExp, "subject_id_in")));
+                    exp.setSubjectOut(new Subject(RepositoryId.fromJsonObj(jsonExp, "subject_id_out")));
                     return fillExperiment(token, exp);
 
                     // return jsonToExperiment(jsonExp);
@@ -316,8 +317,8 @@ public class ExperimentRepository implements AutoCloseable {
                     }
 
                     exp.trial = new Trial(RepositoryId.fromJsonObj(jsonExp, "trial_id"));
-                    exp.setSubjectIn(new Subject(jsonExp.getAsString("subject_id_in")));
-                    exp.setSubjectOut(new Subject(jsonExp.getAsString("subject_id_out")));
+                    exp.setSubjectIn(new Subject(RepositoryId.fromJsonObj(jsonExp, "subject_id_in")));
+                    exp.setSubjectOut(new Subject(RepositoryId.fromJsonObj(jsonExp, "subject_id_out")));
                     return fillExperiment(token, exp);
 
                     // return jsonToExperiment(jsonExp);
@@ -376,11 +377,11 @@ public class ExperimentRepository implements AutoCloseable {
         exp.trial = new Trial(RepositoryId.fromJsonObj(trial, "id"), RepositoryId.fromJsonObj(trial,"model_id"));
         final JSONObject subject_in_js = (JSONObject) jsonExp.get("subject_id_in");
 
-        final Subject subjectIn = new Subject(subject_in_js.getAsString("id"), subject_in_js.getAsString("description"));
+        final Subject subjectIn = new Subject(RepositoryId.fromJsonObj(subject_in_js, "id"), subject_in_js.getAsString("description"));
         subjectIn.setExternalId(subject_in_js.getAsString("subject_external_id"));
         exp.setSubjectIn(subjectIn);
         final JSONObject subject_out_js = (JSONObject) jsonExp.get("subject_id_out");
-        final Subject subject_out = new Subject(subject_out_js.getAsString("id"), subject_out_js.getAsString("description"));
+        final Subject subject_out = new Subject(RepositoryId.fromJsonObj(subject_out_js, "id"), subject_out_js.getAsString("description"));
         exp.setSubjectOut(subject_out);
         return exp;
     }
@@ -397,7 +398,7 @@ public class ExperimentRepository implements AutoCloseable {
 
                     ByteArrayOutputStream baos = new ByteArrayOutputStream();
                     return this.downloadFile(optFileId.get(), baos, token)
-                            .thenApply(__ -> ByteBuffer.wrap(baos.toByteArray()));
+                            .thenApply(aVoid -> ByteBuffer.wrap(baos.toByteArray()));
                 });
     }
 
@@ -412,15 +413,17 @@ public class ExperimentRepository implements AutoCloseable {
 
                     final CompletableFuture<Boolean> delSub1Fut =
                             this.apiServer.deleteResourceAsync(API_BASE_URI + "deleteSubjectById/", token,
-                                    Collections.singletonMap("id", experiment.getSubjectIn().getId()));
+                                    Collections.singletonMap("id", experiment.getSubjectIn().getId().toString()));
                     final CompletableFuture<Boolean> delSub2Fut =
                             this.apiServer.deleteResourceAsync(API_BASE_URI + "deleteSubjectById/", token,
-                                    Collections.singletonMap("id", experiment.getSubjectOut().getId()));
+                                    Collections.singletonMap("id", experiment.getSubjectOut().getId().toString()));
 
                     return CompletableFuture.allOf(delSub1Fut, delSub2Fut)
                             .thenApply(v -> delSub1Fut.join() && delSub2Fut.join());
                 });
 
     }
+
+
 
 }

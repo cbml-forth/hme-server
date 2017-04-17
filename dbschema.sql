@@ -49,6 +49,8 @@ CREATE TABLE experiments (
   hypermodel_version BIGINT NOT NULL REFERENCES hypermodel_versions(hypermodel_version) ON DELETE CASCADE,
   workflow_uuid UUID NOT NULL,
   status TEXT NOT NULL,
+  subject_in_id INTEGER NOT NULL,
+  subject_out_id INTEGER NOT NULL,
   data JSONB NOT NULL,
   inserted_at TIMESTAMP(6) NOT NULL DEFAULT statement_timestamp()
 );

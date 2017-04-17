@@ -1,5 +1,7 @@
 package gr.forth.ics.cbml.chic.hme.server.execution;
 
+import gr.forth.ics.cbml.chic.hme.server.modelrepo.RepositoryId;
+
 import java.time.Instant;
 
 /**
@@ -7,19 +9,19 @@ import java.time.Instant;
  */
 public class TrFile {
 
-    private final String id;
+    private final RepositoryId id;
     private final String kind;
     // private final Date createdOn;
     private final Instant createdOn;
 
-    public TrFile(final String id, final String kind, final Instant createdOn)
+    public TrFile(final RepositoryId id, final String kind, final Instant createdOn)
     {
         this.id = id;
         this.kind = kind;
         this.createdOn = createdOn; //DatatypeConverter.parseDateTime(createdOn).getTime();
     }
 
-    public String getId() {
+    public RepositoryId getId() {
         return id;
     }
 

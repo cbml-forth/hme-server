@@ -132,7 +132,7 @@ public class ExecutionManager {
         return FutureUtils.thenComposeBoth(inputFileFut, t2FlowFileFut,
                 (inputFileId, t2FlowFileId) -> {
                     final RepositoryId experimentId = experiment.id;
-                    final String subject_out_id = experiment.getSubjectOut().getId();
+                    final String subject_out_id = experiment.getSubjectOut().getId().toString();
 
                     HashMap<String, String> m = new HashMap<>();
                     m.put("workflow_title", experiment.description == null ? "Experiment" : experiment.description);
@@ -228,37 +228,46 @@ public class ExecutionManager {
     }
 
 
-    private CompletableFuture<Path> downloadResultsImpl(final UUID experimentUuid,
-                                                        final List<Output> outputs,
-                                                        final Path dir,
-                                                        SAMLToken token) {
+    private CompletableFuture<RepositoryId> outputsFileIdForExperiment(final UUID experimentUuid, SAMLToken token)
+    {
+
         return expRepository.getExperiment(token, experimentUuid)
-                .thenCompose((Experiment experiment) -> {
+                .thenApply((Experiment experiment) -> {
                     if (experiment.status == Experiment.EXP_RUN_STATE.FINISHED_OK && experiment.getOutputFiles().size() > 0) {
                         final Optional<TrFile> file = experiment.getOutputFiles().stream()
                                 .filter(TrFile::isOutput)
                                 .findFirst(); // XXX: can it have more than one (zip) output files?
                         if (!file.isPresent())
-                            return FutureUtils.completeExFuture(new Throwable("Experiment does not have outputs"));
+                            throw new RuntimeException("Experiment does not have outputs");
 
-                        final String fileId = file.get().getId();
-                        try {
-                            if (!dir.toFile().exists()) {
-                                Files.createDirectories(dir);
-                                System.err.println("* Outputs of experiment " + experimentUuid + " will be saved at " + dir);
-                            }
-                            return downloadAndUnzip(dir, fileId, outputs, token);
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                            return FutureUtils.completeExFuture(e);
-                        }
+                        final RepositoryId fileId = file.get().getId();
+                        return fileId;
                     }
-                    return FutureUtils.completeExFuture(new Throwable("Experiment has not finished?"));
+                    throw new RuntimeException("Experiment has not finished?");
+                });
+    }
+
+    private CompletableFuture<Path> downloadResultsImpl(final UUID experimentUuid,
+                                                        final List<Output> outputs,
+                                                        final Path dir,
+                                                        SAMLToken token) {
+        return outputsFileIdForExperiment(experimentUuid, token)
+                .thenCompose(fileId -> {
+                    try {
+                        if (!dir.toFile().exists()) {
+                            Files.createDirectories(dir);
+                            System.err.println("* Outputs of experiment " + experimentUuid + " will be saved at " + dir);
+                        }
+                        return downloadAndUnzip(dir, fileId, outputs, token);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                        return FutureUtils.completeExFuture(e);
+                    }
                 });
     }
 
     private CompletableFuture<Path> downloadAndUnzip(final Path dir,
-                                                     final String file_id,
+                                                     final RepositoryId file_id,
                                                      final List<Output> outputs,
                                                      SAMLToken token) throws IOException {
         final Path tempFile = Files.createTempFile(dir, "output-", ".zip");

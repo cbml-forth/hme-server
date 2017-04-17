@@ -18,10 +18,7 @@ package gr.forth.ics.cbml.chic.hme.server;
 import com.github.pgasync.ConnectionPoolBuilder;
 import com.github.pgasync.Db;
 import com.github.pgasync.Row;
-import gr.forth.ics.cbml.chic.hme.server.execution.ExecutionFramework;
-import gr.forth.ics.cbml.chic.hme.server.execution.ExecutionManager;
-import gr.forth.ics.cbml.chic.hme.server.execution.Experiment;
-import gr.forth.ics.cbml.chic.hme.server.execution.ExperimentRepository;
+import gr.forth.ics.cbml.chic.hme.server.execution.*;
 import gr.forth.ics.cbml.chic.hme.server.modelrepo.*;
 import gr.forth.ics.cbml.chic.hme.server.mq.MessageQueueListener;
 import gr.forth.ics.cbml.chic.hme.server.mq.Observables;
@@ -408,7 +405,10 @@ public class HmeServer {
                         exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .get("/hypermodels/{uuid}", exchange -> exchange.dispatch(() -> get_hypermodel(exchange, database)))
                 .put("/publishedhypermodels/{uuid}",
-                        exchange -> exchange.dispatch(() -> publishHypermodelAndRun(exchange, database, modelRepository, executionManager)));
+                        exchange -> exchange.dispatch(() -> publishHypermodelAndRun(exchange, database, modelRepository, executionManager)))
+                .get("/hypermodels", exchange -> exchange.dispatch(() -> get_hypermodels(exchange, database)))
+
+                .get("/experiments", exchange -> exchange.dispatch(() -> get_experiments(exchange, database)));
 
         // The Api Routes are validated against an authenticated user and
         // that includes an "X-Requested-By" header. The latter is easy way to
@@ -453,6 +453,9 @@ public class HmeServer {
                 .addExactPath("/sse", new PredicateHandler(authnPredicate,
                         exchange -> exchange.dispatch(() -> monitor(exchange, queueListener.observables(), database)),
                         HmeServer::apiError401))
+
+                .addExactPath("/results", // Experiment results "?uuid=..."
+                        exchange -> exchange.dispatch(() -> getExperimentOutputs(exchange, experimentRepository, tokenManager, database)))
 
                 .addExactPath("/login", SecurityHandler.build(loginHandler, samlConfig, "SAML2Client"))
 
@@ -569,15 +572,24 @@ public class HmeServer {
                     final RepositoryId experimentId = experiment.getId();
                     final String experimentUuid = experiment.getUuid();
                     final Experiment.EXP_RUN_STATE status = experiment.getStatus();
-                    final String jsonString = experiment.toJson().toJSONString();
+                    final JSONObject jsonObject = experiment.toJson();
+                    jsonObject.put("version", hypermodel.getVersion());
+                    jsonObject.put("title", hypermodel.getName());
+                    jsonObject.put("hypermodel_uid", hypermodel.getUuid().toString());
+                    final String jsonString = jsonObject.toJSONString();
+
                     exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send(jsonString, IoCallback.END_EXCHANGE);
 
+                    final long subjectInId = experiment.getSubjectIn().getId().getId();
+                    final long subjectOutId = experiment.getSubjectOut().getId().getId();
                     DbUtils.queryDb(database,
-                            "INSERT INTO experiments(experiment_id,experiment_uid,hypermodel_uid,hypermodel_version,workflow_uuid, status,data)" +
-                                    " VALUES($1,$2,$3,$4,$5,$6, $7)",
+                            "INSERT INTO experiments(experiment_id,experiment_uid,hypermodel_uid,hypermodel_version,workflow_uuid," +
+                                    " subject_in_id, subject_out_id, status,data)" +
+                                    " VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
                             Arrays.asList(experimentId.getId(), experimentUuid, hypermodel.getUuid(),
                                     hypermodel.getVersion(), experiment.getWorkflow_uuid(),
+                                    subjectInId, subjectOutId,
                                     status.toString(), jsonString));
 
 
@@ -878,6 +890,73 @@ public class HmeServer {
                 .thenApply(opt -> opt.map(HmeServer::rowToHypermodel));
     }
 
+    private static void getExperimentOutputs(final HttpServerExchange exchange,
+                                             ExperimentRepository expRepo,
+                                             TokenManager tokenManager,
+                                             Db db)
+    {
+        final String user_id = userId(exchange).get();
+        final Optional<UUID> uuidOptional = getUuidParam(exchange, "uuid");
+        if (!uuidOptional.isPresent()) {
+            sendError(exchange, "Experiment was not found!", StatusCodes.NOT_FOUND);
+            return;
+        }
+
+        final UUID experimentUuid = uuidOptional.get();
+        DbUtils.queryOneDb(db,
+                "SELECT subject_out_id FROM experiments WHERE experiment_uid=$1",
+                Collections.singletonList(experimentUuid))
+                .whenComplete((optRow, throwable) -> {
+                    if (throwable != null) {
+                        sendException(exchange, throwable);
+                        return;
+                    }
+                    if (!optRow.isPresent()) {
+                        sendError(exchange, "Hypermodel '" + experimentUuid + "' was not found!",
+                                StatusCodes.NOT_FOUND);
+                        return;
+
+                    }
+                    final Row row = optRow.get();
+                    final RepositoryId subjectOutId = new RepositoryId(row.getLong(0));
+
+                    tokenManager.getDelegationToken(expRepo.AUDIENCE, user_id)
+                            .thenAccept(samlToken -> {
+                                expRepo.getFilesOfSubject(samlToken, subjectOutId)
+                                        .thenApply(trFiles -> trFiles.stream().findFirst().map(TrFile::getId))
+                                        .whenComplete((optFileId, ex) -> {
+                                            if (ex != null) {
+                                                sendException(exchange, ex);
+                                                return;
+                                            }
+                                            if (!optFileId.isPresent()) {
+                                                log.info("get outputs of {} : no output files found for subject out = {}", experimentUuid, subjectOutId);
+                                                sendError(exchange, "Outputs not found!", StatusCodes.NOT_FOUND);
+                                                return;
+                                            }
+                                            exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/zip");
+                                            exchange.getResponseHeaders().put(Headers.CONTENT_DISPOSITION,
+                                                    String.format("attachment; filename=\"out_%s.zip\"", experimentUuid.toString()));
+                                            exchange.startBlocking();
+                                            expRepo.downloadFile(optFileId.get(), exchange.getOutputStream(), samlToken)
+                                                    .whenComplete((v, ex1) -> {
+                                                        if (ex1 != null) {
+                                                            sendException(exchange, ex1);
+                                                            return;
+                                                        }
+                                                        exchange.endExchange();
+                                                    });
+                                        });
+                            })
+                            .exceptionally(exception -> {
+                                log.info("get outputs of "+ experimentUuid + " for subject out "+subjectOutId, exception);
+                                sendException(exchange, exception);
+                                return null;
+                            });
+
+                });
+
+    }
     private static void get_hypermodel(final HttpServerExchange exchange, Db db) {
         final String user_id = userId(exchange).get();
         final Optional<UUID> uuidOptional = getUuidParam(exchange, "uuid");
@@ -941,6 +1020,42 @@ public class HmeServer {
                         " RETURNING hypermodel_version",
                 Arrays.asList(hm.getUuid(), hm.getVersion(), repoID, workflowDescription))
                 .thenApply(row -> hm);
+    }
+    private static void get_experiments(final HttpServerExchange exchange, Db db) {
+        final String user_id = userId(exchange).get();
+
+        final String sql = "SELECT experiment_id, experiment_uid, hypermodel_uid, hypermodel_version, title, status" +
+                        " FROM experiments JOIN hypermodels USING (hypermodel_uid)" +
+                        " JOIN hypermodel_versions USING (hypermodel_uid, hypermodel_version)" +
+                        " WHERE user_id=$1 ORDER BY experiment_id DESC";
+
+        final Consumer<Throwable> onError = throwable -> sendException(exchange, throwable);
+        db.query(sql, Arrays.asList(user_id),
+                resultSet -> {
+                    final JSONArray array = new JSONArray();
+                    final Iterator<Row> rowIterator = resultSet.iterator();
+                    while (rowIterator.hasNext()) {
+                        Row row = rowIterator.next();
+                        final Long experiment_id = row.getLong("experiment_id");
+                        final String experiment_uid = row.getString("experiment_uid");
+                        final String hypermodel_uid = row.getString("hypermodel_uid");
+                        final String status = row.getString("status");
+                        final Long version = row.getLong("hypermodel_version");
+                        final String title = row.getString("title");
+                        final JSONObject jsonObject = new JSONObject();
+                        jsonObject.put("id", experiment_id);
+                        jsonObject.put("uuid", experiment_uid);
+                        jsonObject.put("hypermodel_uid", hypermodel_uid);
+                        jsonObject.put("version", version);
+                        jsonObject.put("title", title);
+                        jsonObject.put("status", status);
+                        array.add(jsonObject);
+
+                    }
+                    exchange.getResponseHeaders().put(HttpString.tryFromString("Content-Type"), "application/json");
+                    exchange.getResponseSender().send(array.toJSONString(), IoCallback.END_EXCHANGE);
+                },
+                onError);
     }
 
     private static Path previewPathFor(final UUID hypermodel_uid, long version)
