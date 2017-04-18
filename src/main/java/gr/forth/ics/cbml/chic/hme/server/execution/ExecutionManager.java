@@ -9,8 +9,8 @@ import lombok.extern.slf4j.Slf4j;
 import nu.xom.*;
 
 import java.io.ByteArrayInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -271,7 +271,7 @@ public class ExecutionManager {
                                                      final List<Output> outputs,
                                                      SAMLToken token) throws IOException {
         final Path tempFile = Files.createTempFile(dir, "output-", ".zip");
-        final FileOutputStream outs = new FileOutputStream(tempFile.toFile());
+        final OutputStream outs = Files.newOutputStream(tempFile);
 
         // System.err.println("Downloading file id="+file_id + " into " + dir);
         return expRepository.downloadFile(file_id, outs, token)

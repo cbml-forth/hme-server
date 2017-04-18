@@ -190,11 +190,6 @@ public class ExperimentRepository implements AutoCloseable {
         form.put("subject_id_out", subject_id_out.getId() + "");
         form.put("status", "NOT_STARTED");
 
-        if (log.isInfoEnabled()) {
-            log.info("--> SO:\n{}", form.entrySet().stream().map(entry -> String.format("\t\t%s:%s", entry.getKey(), entry.getValue()))
-                    .collect(Collectors.joining("\n")));
-        }
-
         return this.apiServer.postForm(API_BASE_URI + "storeExperiment/", token, form)
                 .thenApply(JSONObject.class::cast)
                 .thenApply(jsonObject -> {

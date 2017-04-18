@@ -25,8 +25,8 @@ import lombok.extern.slf4j.Slf4j;
 import lombok.val;
 import net.minidev.json.JSONObject;
 
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
@@ -155,7 +155,7 @@ public class ModelRepository implements AutoCloseable {
 
 
         final Path tempFile = Files.createTempFile("", ".data");
-        final FileOutputStream outputStream = new FileOutputStream(tempFile.toFile());
+        final OutputStream outputStream = Files.newOutputStream(tempFile);
 
         return this.apiServer.downloadContent(url, token, qs, outputStream)
                 .thenApply(__ -> tempFile.toFile());

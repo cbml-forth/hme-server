@@ -16,7 +16,7 @@ import java.util.zip.ZipOutputStream;
  */
 public class ZipUtils {
     public static boolean isZipFile(final Path file) {
-        try (DataInputStream in = new DataInputStream(new FileInputStream(file.toFile()))) {
+        try (DataInputStream in = new DataInputStream(Files.newInputStream(file))) {
             boolean isZip = in.readInt() == 0x504b0304;
             return isZip;
         } catch (IOException ex) {
@@ -43,7 +43,7 @@ public class ZipUtils {
     }
 
     public static void unzipFile(Path outputDir, File zipFile) throws IOException {
-        try (ZipInputStream zis = new ZipInputStream(new FileInputStream(zipFile))) {
+        try (ZipInputStream zis = new ZipInputStream(Files.newInputStream(zipFile.toPath()))) {
             final int MAX_BUF = 4 * 1024 * 1024;
             byte buffer[] = new byte[MAX_BUF];
             for (ZipEntry entry = zis.getNextEntry(); entry != null; entry = zis.getNextEntry()) {
@@ -54,7 +54,7 @@ public class ZipUtils {
                     if (!Files.exists(outputEntryPath.getParent())) {
                         Files.createDirectories(outputEntryPath.getParent());
                     }
-                    try (FileOutputStream fos = new FileOutputStream(outputEntryPath.toString())) {
+                    try (OutputStream fos = Files.newOutputStream(outputEntryPath)) {
                         while (true) {
                             int k = zis.read(buffer, 0, MAX_BUF);
                             if (k > 0)
@@ -71,7 +71,7 @@ public class ZipUtils {
     }
 
     public static void zipDir(final Path folder, final Path zipFilePath) throws IOException {
-        try (FileOutputStream fos = new FileOutputStream(zipFilePath.toFile());
+        try (OutputStream fos = Files.newOutputStream(zipFilePath);
              ZipOutputStream zos = new ZipOutputStream(fos)) {
             Files.walkFileTree(folder, new SimpleFileVisitor<Path>() {
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {

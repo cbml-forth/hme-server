@@ -60,8 +60,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -700,7 +700,8 @@ public class HmeServer {
         tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
                 .thenApply(token -> {
 
-                    try (FileInputStream fis = new FileInputStream("/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme/resources/public/models.json")) {
+                    final String name = "/Users/ssfak/Documents/Projects/CHIC/WP10/editor/chic-hme/resources/public/models.json";
+                    try (InputStream fis = Files.newInputStream(Paths.get(name))) {
                         final JSONParser jsonParser = new JSONParser(JSONParser.MODE_RFC4627);
                         final JSONArray objects = (JSONArray) jsonParser.parse(fis);
 
