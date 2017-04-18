@@ -13,7 +13,6 @@ import rx.Observable;
 import rx.Subscription;
 import rx.schedulers.Schedulers;
 
-import java.math.BigInteger;
 import java.util.Objects;
 
 public class MonitorConnectionHandler implements ServerSentEventConnectionCallback {
@@ -22,32 +21,28 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
 
     private final String userId;
     private final Observable<JSONObject> observable;
-    private long lastEventId;
     private final Db db;
 
-    private ServerSentEventConnection sseConn;
     private Subscription subscription;
 
 
     public MonitorConnectionHandler(final String userId,
                                     final Observable<JSONObject> observable,
-                                    long lastEventId,
                                     final Db db) {
         this.userId = userId;
         this.observable = observable;
-        this.lastEventId = lastEventId;
         this.db = db;
     }
 
 
-    private Observable<JSONObject> lastEvents() {
+    private Observable<JSONObject> lastEvents(long lastEventId) {
         if (lastEventId < 0)
             return Observable.empty();
 
         return db.queryRows(
                 "SELECT event_id, experiments.data::text " +
                         " FROM events JOIN experiments ON (experiment_uid=aggregate_uuid)" +
-                        " WHERE event_id>$1 ORDER BY event_id ASC", lastEventId)
+                        " WHERE event_id>$1 AND user_uid=$2 ORDER BY event_id ASC", lastEventId, userId)
                 .map(row -> {
                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
                     JSONObject o = null;
@@ -63,21 +58,26 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
     }
 
     @Override
-    public void connected(ServerSentEventConnection sseConn,
-                          String s) {
-        this.sseConn = sseConn;
-        // this.sseConn.setKeepAliveTime(10_000);
+    public void connected(final ServerSentEventConnection sseConn,
+                          final String lastEventIdStr) {
+        sseConn.setKeepAliveTime(10_000);
         sseConn.addCloseTask(serverSentEventConnection -> {
             log.info("closing sse conn for user {}", userId);
             if (this.subscription != null)
                 this.subscription.unsubscribe();
         });
 
-        log.info("START MONITORING FOR USER {}", userId);
+        log.info("START MONITORING FOR USER {} (last event id={})", userId, lastEventIdStr);
 
-        this.subscription = observable
-                //.map(Messages.Message::toJson)
-                .startWith(lastEvents())
+        Observable<JSONObject> eventsObservable;
+        if (lastEventIdStr != null && !"".equals(lastEventIdStr)) {
+            long lastEventId = Long.parseLong(lastEventIdStr);
+            eventsObservable = observable.startWith(lastEvents(lastEventId));
+        }
+        else
+            eventsObservable = observable;
+
+        this.subscription = eventsObservable
                 .observeOn(Schedulers.io())
                 .filter(jsonObject -> userId.equals(jsonObject.getAsString("user_uid")))
                 .subscribe(jsonObject -> {

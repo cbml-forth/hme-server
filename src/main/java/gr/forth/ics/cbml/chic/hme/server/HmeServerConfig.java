@@ -58,7 +58,7 @@ public interface HmeServerConfig extends Config, Accessible {
     @DefaultValue("https://istr.chic-vph.eu/api/")
     URI istrServiceUrl();
 
-    @DefaultValue("60")
+    @DefaultValue("3600")
     int maxSessionInactivity();
 
     @DefaultValue("1000")

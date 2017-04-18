@@ -470,6 +470,7 @@ public class HmeServer {
         sessionConfig.setPath(FileUtils.endWithSlash(BASE_PATH));
         sessionConfig.setHttpOnly(true);
         final InMemorySessionManager sessionManager = new InMemorySessionManager("SessionManager", serverConfig.maxSessions());
+        sessionManager.setDefaultSessionTimeout(config.maxSessionInactivity());
         final SessionAttachmentHandler sessionHandler =
                 new SessionAttachmentHandler(Handlers.path().addPrefixPath(BASE_PATH, rootHandler),
                         sessionManager,
@@ -514,7 +515,7 @@ public class HmeServer {
             sendNotFound(exchange, "Hypermodel not found!");
             return;
         }
-        Optional<String> actAsOpt = userId(exchange);
+        Optional<String> actAsOpt = userName(exchange);
         if (!actAsOpt.isPresent()) {
             sendError(exchange, "Not authenticated", StatusCodes.UNAUTHORIZED);
             return;
@@ -522,6 +523,7 @@ public class HmeServer {
 
         final UUID hypermodelUuid = uuidOpt.get();
         final String actAs = actAsOpt.get();
+        final String user_uid = userUid(exchange).get();
 
         exchange.startBlocking();
 
@@ -596,10 +598,10 @@ public class HmeServer {
                     final long subjectInId = experiment.getSubjectIn().getId().getId();
                     final long subjectOutId = experiment.getSubjectOut().getId().getId();
                     DbUtils.queryDb(database,
-                            "INSERT INTO experiments(experiment_id,experiment_uid,hypermodel_uid,hypermodel_version,workflow_uuid," +
+                            "INSERT INTO experiments(user_uid, experiment_id,experiment_uid,hypermodel_uid,hypermodel_version,workflow_uuid," +
                                     " subject_in_id, subject_out_id, status,data)" +
-                                    " VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-                            Arrays.asList(experimentId.getId(), experimentUuid, hypermodel.getUuid(),
+                                    " VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9, $10)",
+                            Arrays.asList(user_uid, experimentId.getId(), experimentUuid, hypermodel.getUuid(),
                                     hypermodel.getVersion(), experiment.getWorkflow_uuid(),
                                     subjectInId, subjectOutId,
                                     status.toString(), jsonString));
@@ -706,7 +708,7 @@ public class HmeServer {
 
         ChicAccount.currentUser(exchange).map(Object::toString).ifPresent(System.out::println);
         ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.out::println);
-        Optional<String> actAs = userId(exchange);
+        Optional<String> actAs = userName(exchange);
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = // getAnnotationsOfModels(semanticStore);
         CompletableFuture.completedFuture(Collections.emptyList());
         tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
@@ -750,7 +752,7 @@ public class HmeServer {
         System.err.println("-> getAllModels");
 
         ChicAccount.currentUser(exchange).map(ChicAccount::attrsToString).ifPresent(System.err::println);
-        Optional<String> actAs = userId(exchange);
+        Optional<String> actAs = userName(exchange);
         final CompletableFuture<List<Map<String, String>>> annotationsOfModels = getAnnotationsOfModels(semanticStore)
                 .exceptionally(ex -> {
                     log.error("Getting annotations ", ex);
@@ -850,12 +852,15 @@ public class HmeServer {
     }
 
 
-    private static Optional<String> userId(final HttpServerExchange exchange) {
+    private static Optional<String> userName(final HttpServerExchange exchange) {
         return ChicAccount.currentUser(exchange).map(ChicAccount::getUsername);
+    }
+    private static Optional<String> userUid(final HttpServerExchange exchange) {
+        return ChicAccount.currentUser(exchange).map(ChicAccount::getUserId);
     }
 
     private static void get_hypermodels(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange).get();
+        final String user_id = userName(exchange).get();
 
         final long start = System.currentTimeMillis();
 
@@ -908,7 +913,8 @@ public class HmeServer {
                                              TokenManager tokenManager,
                                              Db db)
     {
-        final String user_id = userId(exchange).get();
+        final String actAs = userName(exchange).get();
+        final String user_uid = userUid(exchange).get();
         final Optional<UUID> uuidOptional = getUuidParam(exchange, "uuid");
         if (!uuidOptional.isPresent()) {
             sendError(exchange, "Experiment was not found!", StatusCodes.NOT_FOUND);
@@ -917,15 +923,15 @@ public class HmeServer {
 
         final UUID experimentUuid = uuidOptional.get();
         DbUtils.queryOneDb(db,
-                "SELECT subject_out_id FROM experiments WHERE experiment_uid=$1",
-                Collections.singletonList(experimentUuid))
+                "SELECT subject_out_id FROM experiments WHERE experiment_uid=$1 and user_uid=$2",
+                Arrays.asList(experimentUuid, user_uid))
                 .whenComplete((optRow, throwable) -> {
                     if (throwable != null) {
                         sendException(exchange, throwable);
                         return;
                     }
                     if (!optRow.isPresent()) {
-                        sendError(exchange, "Hypermodel '" + experimentUuid + "' was not found!",
+                        sendError(exchange, "Experiment '" + experimentUuid + "' was not found!",
                                 StatusCodes.NOT_FOUND);
                         return;
 
@@ -933,7 +939,7 @@ public class HmeServer {
                     final Row row = optRow.get();
                     final RepositoryId subjectOutId = new RepositoryId(row.getLong(0));
 
-                    tokenManager.getDelegationToken(expRepo.AUDIENCE, user_id)
+                    tokenManager.getDelegationToken(expRepo.AUDIENCE, actAs)
                             .thenAccept(samlToken -> {
                                 expRepo.getFilesOfSubject(samlToken, subjectOutId)
                                         .thenApply(trFiles -> trFiles.stream().findFirst().map(TrFile::getId))
@@ -971,7 +977,7 @@ public class HmeServer {
 
     }
     private static void get_hypermodel(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange).get();
+        final String actAs = userName(exchange).get();
         final Optional<UUID> uuidOptional = getUuidParam(exchange, "uuid");
         if (!uuidOptional.isPresent()) {
             sendError(exchange, "Hypermodel was not found!", StatusCodes.NOT_FOUND);
@@ -980,7 +986,7 @@ public class HmeServer {
         final Optional<Long> versionOpt = getParam(exchange, "version").map(Long::valueOf);
 
         final UUID uuid = uuidOptional.get();
-        db_get_hypermodel(db, uuid, versionOpt, user_id)
+        db_get_hypermodel(db, uuid, versionOpt, actAs)
                 .whenComplete((hmOpt, throwable) -> {
                     if (throwable != null) {
                         sendException(exchange, throwable);
@@ -1035,7 +1041,7 @@ public class HmeServer {
                 .thenApply(row -> hm);
     }
     private static void get_experiments(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange).get();
+        final String user_id = userName(exchange).get();
 
         final String sql = "SELECT experiment_id, experiment_uid, hypermodel_uid, hypermodel_version, title, status" +
                         " FROM experiments JOIN hypermodels USING (hypermodel_uid)" +
@@ -1088,7 +1094,7 @@ public class HmeServer {
     }
 
     static void preview_hypermodel(final HttpServerExchange exchange, Db db) {
-        final String user_id = userId(exchange).get();
+        final String user_id = userName(exchange).get();
 
         final Optional<UUID> uuidOptional = getUuidParam(exchange, "hmid");
         if (!uuidOptional.isPresent()) {
@@ -1254,7 +1260,7 @@ public class HmeServer {
 
     private static void save_hypermodel(final HttpServerExchange exchange, Db db) {
 
-        final String user_id = userId(exchange).get();
+        final String user_id = userName(exchange).get();
         final Consumer<Throwable> onError = throwable -> sendException(exchange, throwable);
         exchange.startBlocking();
         try {
@@ -1404,20 +1410,14 @@ public class HmeServer {
 
 
     static void monitor(HttpServerExchange exchange, Observables observables, Db db) {
-        final String userId = ChicAccount.currentUser(exchange).map(ChicAccount::getUserId).get();
-
-        long lastEventId = -1L;
-        final HeaderValues lastEventHdr = exchange.getRequestHeaders().get("Last-Event-ID");
-        if (lastEventHdr != null && !lastEventHdr.isEmpty()) {
-            lastEventId = Long.parseLong(lastEventHdr.getFirst());
-        }
+        final String userId = userUid(exchange).get();
 
         System.out.printf("[%s] monitor_experiment\n", userId);
         try {
             exchange.getResponseHeaders().put(Headers.CACHE_CONTROL, "no-cache");
             // For proxying by nginx (https://www.nginx.com/resources/wiki/start/topics/examples/x-accel/#x-accel-buffering):
             exchange.getResponseHeaders().put(HttpString.tryFromString("X-Accel-Buffering"), "no");
-            new ServerSentEventHandler(new MonitorConnectionHandler(userId, observables.executionMessages(), lastEventId, db))
+            new ServerSentEventHandler(new MonitorConnectionHandler(userId, observables.executionMessages(), db))
                     .handleRequest(exchange);
         } catch (Exception e) {
             e.printStackTrace();
