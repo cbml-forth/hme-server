@@ -553,11 +553,13 @@ public class HmeServer {
             return;
         }
 
+        final long start = System.currentTimeMillis();
+        final long endTimes[] = new long[2];
         publishHypermodel(database, modelRepository, hypermodelUuid, version, actAs,
                 workflowDescription, inputs, outputs)
                 .thenCompose(hypermodel -> {
+                    endTimes[0] = System.currentTimeMillis();
                     final RepositoryId repoId = hypermodel.getPublishedRepoId().get();
-                    System.err.println("--> Running " + repoId);
                     final String experimentDescription = String.format("Test execution of '%s' through HME", hypermodel.getName());
                     return executionManager.runHypermodel(repoId, experimentDescription, "", inputs, actAs)
                             .thenApply(experiment -> Tuple.tuple(hypermodel, experiment));
@@ -567,6 +569,12 @@ public class HmeServer {
                         sendException(exchange, ex);
                         return;
                     }
+                    endTimes[1] = System.currentTimeMillis();
+
+                    // Timings
+                    final long publishingTime = endTimes[0] - start;
+                    final long expVphTime = endTimes[1] - endTimes[0];
+
                     final Hypermodel hypermodel = tuple2.v1();
                     final Experiment experiment = tuple2.v2();
                     final RepositoryId experimentId = experiment.getId();
@@ -578,7 +586,11 @@ public class HmeServer {
                     jsonObject.put("hypermodel_uid", hypermodel.getUuid().toString());
                     final String jsonString = jsonObject.toJSONString();
 
-                    exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
+                    final HttpString timingHeader = HttpString.tryFromString("Server-Timing");
+                    exchange.getResponseHeaders()
+                            .add(Headers.CONTENT_TYPE, "application/json")
+                            .add(timingHeader, String.format("MR=%d ;\"Model Repository\"", publishingTime))
+                            .add(timingHeader, String.format("TR=%d ;\"iSTR and VPH-HF launch\"", expVphTime));
                     exchange.getResponseSender().send(jsonString, IoCallback.END_EXCHANGE);
 
                     final long subjectInId = experiment.getSubjectIn().getId().getId();
@@ -854,7 +866,7 @@ public class HmeServer {
         db.query(sql, Arrays.asList(user_id),
                 rs -> {
                     final long stop = System.currentTimeMillis();
-                    double elapsedTime = (stop - start) / 1000.0;
+                    final long elapsedTime = stop - start;
                     JSONParser p = new JSONParser(JSONParser.MODE_RFC4627);
                     JSONArray l = new JSONArray();
                     rs.forEach(row -> {
@@ -867,7 +879,7 @@ public class HmeServer {
                         }
 
                     });
-                    exchange.getResponseHeaders().add(HttpString.tryFromString("Server-Timing"), String.format("db=%f ;Database", elapsedTime));
+                    exchange.getResponseHeaders().add(HttpString.tryFromString("Server-Timing"), String.format("db=%d ;Database", elapsedTime));
                     exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send(l.toJSONString(), IoCallback.END_EXCHANGE);
                 },
@@ -1282,14 +1294,14 @@ public class HmeServer {
                                     Arrays.asList(uuid, title, description, svgContent, canvas, graph.toJSONString(), frozen, isStronglyCoupled),
                                     rs1 -> {
                                         long stop = System.currentTimeMillis();
-                                        double elapsedTime = (stop - start) / 1000.0;
+                                        long elapsedTime = stop - start;
 
                                         final Long version = rs1.row(0).getLong(0);
                                         final ETag eTag2 = hypermodelEtag(version);
 
                                         exchange.setStatusCode(StatusCodes.CREATED);
                                         exchange.getResponseHeaders()
-                                                .add(HttpString.tryFromString("Server-Timing"), String.format("db=%f ;Database", elapsedTime))
+                                                .add(HttpString.tryFromString("Server-Timing"), String.format("db=%d ;Database", elapsedTime))
                                                 .add(Headers.LOCATION, String.format("/hypermodels/%s/%d", uuid, version))
                                                 .add(Headers.ETAG, eTag2.toString());
                                         exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
