@@ -98,7 +98,7 @@ public class MessageQueueListener implements AutoCloseable{
             // subscribers
             if (event.isPresent())
                 this.saveMessage(event.get())
-                        .whenComplete(((msg, throwable) -> {
+                        .whenComplete(((msgOpt, throwable) -> {
                             boolean requeue = true;
                             boolean multipleAck = false;
                             boolean msgSavedOk = throwable == null;
@@ -116,13 +116,15 @@ public class MessageQueueListener implements AutoCloseable{
                             try {
                                 if (msgSavedOk) {
                                     // When the Event/Message has been safely handled
+                                    // (even if we don't have such Experiment in the database)
                                     // acknowledge its receipt...
                                     myChannel.basicAck(deliveryTag, multipleAck);
                                     log.info("BasicAck-ed {}", deliveryTag);
-                                    this.publisher.publish(msg);
+                                    if (msgOpt.isPresent())
+                                        this.publisher.publish(msgOpt.get());
                                 }
                                 else {
-                                    // We couldn't store the Event in the Database!
+                                    // We couldn't store the Event in the Database, an exception was thrown
                                     myChannel.basicNack(deliveryTag, multipleAck, requeue);
                                     log.info("storing event in DB", throwable);
                                 }
@@ -136,9 +138,8 @@ public class MessageQueueListener implements AutoCloseable{
             }
 
         }
-        private CompletableFuture<Message> saveMessage(Messages.Message msg)
+        private CompletableFuture<Optional<Message>> saveMessage(Messages.Message msg)
         {
-
             final boolean isExecutionMsg = msg.toExecutionStatus().isPresent();
             final String aggregate_type = isExecutionMsg ? "experiment" : "model";
             final UUID uuid = isExecutionMsg ? msg.toExecutionStatus().get().getWorkflowUUID()
@@ -155,10 +156,18 @@ public class MessageQueueListener implements AutoCloseable{
             return DbUtils.queryDb(db, sql,
                     Arrays.asList(event_type, aggregate_type, uuid, jsonData))
                     .thenApply(resultSet -> {
-                        final Row row = resultSet.row(0);
-                        final long eventId = row.getLong(0);
-                        msg.setId(eventId);
-                        return msg;
+                        // It can be the case (in test cases) that we receive a Execution message
+                        // for an experiment that we don't have in our database. In this case,
+                        // we don't get any rows back..
+                        if (resultSet.size() > 0) {
+                            final Row row = resultSet.row(0);
+                            final long eventId = row.getLong(0);
+                            msg.setId(eventId);
+                            return Optional.of(msg);
+                        }
+                        // Return an "empty" value if there's no such experiment in
+                        // our database:
+                        return Optional.empty();
                     });
 
         }
