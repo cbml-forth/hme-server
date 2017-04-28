@@ -122,6 +122,8 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public void onThrowable(Throwable t) {
                                 req_in_flight.release();
+                                total_req.incrementAndGet();
+                                failed_req.incrementAndGet();
                                 t.setStackTrace(clientTrace.getStackTrace());
 
                                 log.error("ERROR EX: {} for {}", t, request.getUrl());
@@ -131,13 +133,14 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public Response onCompleted(Response response) throws Exception {
                                 req_in_flight.release();
+                                total_req.incrementAndGet();
                                 fut.complete(response.getStatusCode() / 100 == 2);
                                 return response;
                             }
 
                         });
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                log.error("deleteResourceAsync", e);
             }
         });
         return fut;
@@ -220,11 +223,11 @@ public class WebApiServer implements AutoCloseable {
                             @Override
                             public void onThrowable(Throwable t) {
                                 req_in_flight.release();
+                                self.total_req.incrementAndGet();
+                                self.failed_req.incrementAndGet();
                                 t.setStackTrace(clientTrace.getStackTrace());
                                 log.error("ERROR EX: {} for {}", t, request.getUrl());
                                 fut.completeExceptionally(t);
-                                self.total_req.incrementAndGet();
-                                self.failed_req.incrementAndGet();
                             }
 
 
@@ -259,7 +262,7 @@ public class WebApiServer implements AutoCloseable {
                             }
                         });
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                log.error("download content", e);
             }
         });
         return fut;
@@ -346,12 +349,13 @@ public class WebApiServer implements AutoCloseable {
         try {
             final Exception clientTrace = clientTrace();
             req_in_flight.acquire();
-            final int requestNbr = self.total_req.incrementAndGet();
             //System.err.println("SENDING REQUEST:"); request.getHeaders().forEach((s, strings) -> System.err.println(s + ":" + strings));
             AsyncCompletionHandler<Response> handler = new AsyncCompletionHandler<Response>() {
                 @Override
                 public void onThrowable(Throwable t) {
                     req_in_flight.release();
+                    self.total_req.incrementAndGet();
+                    self.failed_req.incrementAndGet();
                     t.setStackTrace(clientTrace.getStackTrace());
 
                     log.error("ERROR EX: {} for {}", t, request.getUrl());
@@ -361,6 +365,7 @@ public class WebApiServer implements AutoCloseable {
                 @Override
                 public Response onCompleted(Response response) throws Exception {
                     req_in_flight.release();
+                    self.total_req.incrementAndGet();
                     if (response.getStatusCode() / 100 != 2) {
                         log.error("ERROR: {} for '{}' BODY:\n{}", response.getStatusText(), request.getUrl(),
                                 response.getResponseBody());
@@ -388,7 +393,7 @@ public class WebApiServer implements AutoCloseable {
             // emitter.setCancellation(() -> fut.cancel(false));
 
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            log.error("emitJSONResponse", e);
         }
     }
 
@@ -506,16 +511,17 @@ public class WebApiServer implements AutoCloseable {
                         @Override
                         public void onThrowable(Throwable t) {
                             req_in_flight.release();
+                            self.total_req.incrementAndGet();
+                            self.failed_req.incrementAndGet();
                             t.setStackTrace(clientTrace.getStackTrace());
                             log.error("ERROR EX: {} for {}", t, request.getUrl());
                             fut.completeExceptionally(t);
-                            self.total_req.incrementAndGet();
-                            self.failed_req.incrementAndGet();
                         }
 
                         @Override
                         public Response onCompleted(Response response) throws Exception {
                             req_in_flight.release();
+                            self.total_req.incrementAndGet();
                             if (response.getStatusCode() == 404) {
                                 final RuntimeException ex = new RuntimeException("Resource " + response.getUri() +
                                         " (method: " + request.getMethod() + ") not found?");
@@ -534,12 +540,11 @@ public class WebApiServer implements AutoCloseable {
                                 //System.out.println(body);
                                 fut.complete(response.getResponseBodyAsStream());
                             }
-                            self.total_req.incrementAndGet();
                             return response;
                         }
                     });
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            log.error("executeRequestAndParseResponse", e);
         }
     }
 
