@@ -61,7 +61,11 @@
             <artifactId>amqp-client</artifactId>
             <version>4.0.2</version>
         </dependency>
-
+        <dependency>
+            <groupId>net.jodah</groupId>
+            <artifactId>lyra</artifactId>
+            <version>0.5.4</version>
+        </dependency>
         <dependency>
             <groupId>net.minidev</groupId>
             <artifactId>json-smart</artifactId>

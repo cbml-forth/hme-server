@@ -11,7 +11,6 @@ import org.slf4j.LoggerFactory;
 import org.xnio.IoUtils;
 import rx.Observable;
 import rx.Subscription;
-import rx.schedulers.Schedulers;
 
 import java.util.Objects;
 
@@ -78,7 +77,7 @@ public class MonitorConnectionHandler implements ServerSentEventConnectionCallba
             eventsObservable = observable;
 
         this.subscription = eventsObservable
-                .observeOn(Schedulers.io())
+                //.observeOn(Schedulers.io())
                 .filter(jsonObject -> userId.equals(jsonObject.getAsString("user_uid")))
                 .subscribe(jsonObject -> {
                             log.info("SSE: {}", jsonObject);

@@ -7,6 +7,12 @@ import gr.forth.ics.cbml.chic.hme.server.HmeServerConfig;
 import gr.forth.ics.cbml.chic.hme.server.mq.Messages.Message;
 import gr.forth.ics.cbml.chic.hme.server.utils.DbUtils;
 import lombok.extern.slf4j.Slf4j;
+import net.jodah.lyra.ConnectionOptions;
+import net.jodah.lyra.Connections;
+import net.jodah.lyra.config.Config;
+import net.jodah.lyra.config.RecoveryPolicy;
+import net.jodah.lyra.config.RetryPolicy;
+import net.jodah.lyra.util.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,6 +31,7 @@ public class MessageQueueListener implements AutoCloseable{
     private static final Logger log =
             LoggerFactory.getLogger(MessageQueueListener.class);
 
+    private final Config haConfig;
     public final String AMQP_URI;
     private static final String vphhfConsumerTag = "hme-vphhf-Consumer";
     private static final String mrConsumerTag = "hme-mr-Consumer";
@@ -36,6 +43,7 @@ public class MessageQueueListener implements AutoCloseable{
     private final Db database;
 
     private final ConnectionFactory factory;
+    private final ConnectionOptions connectionOptions;
     private Connection conn;
     private final Observables publisher;
 
@@ -52,9 +60,22 @@ public class MessageQueueListener implements AutoCloseable{
 
         ExecutorService es = Executors.newFixedThreadPool(config.amqpThreadsNbr());
         factory.setSharedExecutor(es);
+        /*
         factory.setAutomaticRecoveryEnabled(true); // Reconnect if connection lost..
         factory.setRequestedHeartbeat(60); // 1 min
         factory.setConnectionTimeout(5000); // 5 secs
+        */
+
+        this.haConfig = new Config()
+                .withRecoveryPolicy(new RecoveryPolicy()
+                        .withBackoff(Duration.seconds(1), Duration.seconds(30))
+                        .withMaxAttempts(-1))
+                .withRetryPolicy(new RetryPolicy()
+                        .withMaxAttempts(10)
+                        .withInterval(Duration.seconds(1))
+                        .withMaxDuration(Duration.minutes(5)));
+        this.connectionOptions = new ConnectionOptions().withConnectionFactory(factory);
+
 
         this.publisher = new Observables(db);
 
@@ -182,7 +203,7 @@ public class MessageQueueListener implements AutoCloseable{
         try {
             log.info("Trying to connect to {}, persistent? {}", AMQP_URI, persistent);
 
-            this.conn = factory.newConnection();
+            this.conn = Connections.create(this.connectionOptions, this.haConfig);
 
             this.conn.addShutdownListener(e ->
                     log.info("MQ - SHUTDOWN initiated by app? = {} is hard error? = {} Reason: {}",

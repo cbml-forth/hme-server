@@ -66,6 +66,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
@@ -73,6 +74,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static io.undertow.Handlers.routing;
@@ -112,6 +114,10 @@ public class HmeServer {
 
     static int svgToImage(Path inputSvgFile, Path outputSvgPath, int x, int y, int width, int height,
                           int q) {
+        return svgToImage(inputSvgFile, outputSvgPath, x, y, width, height, q, false);
+    }
+    static int svgToImage(Path inputSvgFile, Path outputSvgPath, int x, int y, int width, int height,
+                          int q, boolean useWebp) {
 
         String styles = "svg{background:white;width:5000px;height:5000px}" +
                 ".connection-wrap{display:none}" +
@@ -132,37 +138,64 @@ public class HmeServer {
             y = 0;
         }
 
-        String quality = String.format("%d%%", 100); //XXX
+        final Path previewDir = inputSvgFile.getParent();
+//        final String hm_uuid = previewDir.getFileName().toString();
 
-        final String viewbox = String.format("%d:%d:%d:%d", x, y, width, height);
-        ProcessBuilder processBuilder = new ProcessBuilder("svgexport",
-                inputSvgFile.toString(),
-                outputSvgPath.toString(),
-                quality,
-                viewbox,
-                // "5000:5000", "crop",
-                styles);
-        processBuilder.inheritIO();
-
-        System.err.println(processBuilder.command().stream().collect(Collectors.joining(" ")));
+        Path jpgExported = previewDir.resolve("exported.jpg") ;
+        String program = "svgexport";
 
         try {
-            Process p = processBuilder.start();
-            int exitCode = p.waitFor();
-            if (exitCode == 0 && q < 100) {
-                // Optimize??
-                int maxSizeKB = 20;
+            int exitCode = 0;
+            if (!jpgExported.toFile().exists()) {
+                String quality = String.format("%d%%", 100); //XXX
 
-                ProcessBuilder processBuilder2 = new ProcessBuilder("jpegoptim",
-                        "--size=" + maxSizeKB,
-                        outputSvgPath.toString());
-                processBuilder2.inheritIO();
-                Process p2 = processBuilder2.start();
-                exitCode = p2.waitFor();
+                final String viewbox = String.format("%d:%d:%d:%d", x, y, width, height);
+                program = "svgexport";
+                ProcessBuilder processBuilder = new ProcessBuilder(program,
+                        inputSvgFile.toString(),
+                        jpgExported.toString(),
+                        quality,
+                        viewbox,
+                        // "5000:5000", "crop",
+                        styles);
+                processBuilder.inheritIO();
+
+                System.err.println(processBuilder.command().stream().collect(Collectors.joining(" ")));
+                Process p = processBuilder.start();
+                exitCode = p.waitFor();
+            }
+
+            if (exitCode == 0) {
+                if (useWebp) {
+                    program = "cwebp";
+
+                    int webpQuality = 80;
+                    ProcessBuilder processBuilder2 = new ProcessBuilder(program,
+                            "-q", String.valueOf(webpQuality),
+                            jpgExported.toString(),
+                            "-o", outputSvgPath.toString());
+                    processBuilder2.inheritIO();
+                    Process p2 = processBuilder2.start();
+                    exitCode = p2.waitFor();
+                }
+                else {
+                    Files.copy(jpgExported, outputSvgPath, StandardCopyOption.REPLACE_EXISTING);
+                    if (q < 100) {
+                        // Optimize JPEG??
+                        int maxSizeKB = 20;
+                        program = "jpegoptim";
+                        ProcessBuilder processBuilder2 = new ProcessBuilder(program,
+                                "--size=" + maxSizeKB,
+                                outputSvgPath.toString());
+                        processBuilder2.inheritIO();
+                        Process p2 = processBuilder2.start();
+                        exitCode = p2.waitFor();
+                    }
+                }
             }
             return exitCode;
         } catch (InterruptedException | IOException e) {
-            log.error("spawn jpegoptim", e);
+            log.error("spawn " + program, e);
             return -1;
         }
     }
@@ -179,22 +212,17 @@ public class HmeServer {
 
             Path tempDirectory = Files.createTempDirectory("");
 
+
+            int x = getParam(exchange,"x").map(Integer::parseInt).orElse(0);
+            int y = getParam(exchange,"x").map(Integer::parseInt).orElse(0);
+            int width = getParam(exchange,"w").map(Integer::parseInt).orElse(2000);
+            int height = getParam(exchange,"h").map(Integer::parseInt).orElse(2000);
+            String format = getParam(exchange,"f").orElse("jpeg");
+
             Path inputSvgFile = tempDirectory.resolve("input.svg");
-            Path outputSvgPath = tempDirectory.resolve("output.jpg");
+            Path outputSvgPath = tempDirectory.resolve("output." + (format.equals("jpeg") ? "jpg" : "webp"));
 
             Files.copy(exchange.getInputStream(), inputSvgFile);
-
-            final Map<String, Deque<String>> queryParameters = exchange.getQueryParameters();
-            int x = 0, y = 0;
-            int width = 2000, height = 2000;
-            if (queryParameters.containsKey("x"))
-                x = Integer.parseInt(queryParameters.get("x").getFirst());
-            if (queryParameters.containsKey("y"))
-                y = Integer.parseInt(queryParameters.get("y").getFirst());
-            if (queryParameters.containsKey("w"))
-                width = Integer.parseInt(queryParameters.get("w").getFirst());
-            if (queryParameters.containsKey("h"))
-                height = Integer.parseInt(queryParameters.get("h").getFirst());
 
             int quality = 100; // 0 - 100
             int exitCode = svgToImage(inputSvgFile, outputSvgPath, x, y, width, height, quality);
@@ -216,34 +244,27 @@ public class HmeServer {
         }
     }
 
-    static void previewSvg(final HttpServerExchange exchange, final Path inputSvgFile, final Path outputSvgPath, final ETag etag) {
+    static void previewSvg(final HttpServerExchange exchange, final Path inputSvgFile, final Path outputSvgPath,
+                           boolean useWebpFormat) {
         try {
 
-            final Map<String, Deque<String>> queryParameters = exchange.getQueryParameters();
 
-            int x = 0, y = 0;
-            int width = 2000, height = 2000;
-            if (queryParameters.containsKey("x"))
-                x = Integer.parseInt(queryParameters.get("x").getFirst());
-            if (queryParameters.containsKey("y"))
-                y = Integer.parseInt(queryParameters.get("y").getFirst());
-            if (queryParameters.containsKey("w"))
-                width = Integer.parseInt(queryParameters.get("w").getFirst());
-            if (queryParameters.containsKey("h"))
-                height = Integer.parseInt(queryParameters.get("h").getFirst());
+            int x = getParam(exchange,"x").map(Integer::parseInt).orElse(0);
+            int y = getParam(exchange,"x").map(Integer::parseInt).orElse(0);
+            int width = getParam(exchange,"w").map(Integer::parseInt).orElse(2000);
+            int height = getParam(exchange,"h").map(Integer::parseInt).orElse(2000);
+            int quality = getParam(exchange,"q").map(Integer::parseInt).orElse(100); // 0 - 100
 
-            int quality = 100; // 0 - 100
-            if (queryParameters.containsKey("q"))
-                quality = Integer.parseInt(queryParameters.get("q").getFirst());
+            int exitCode = svgToImage(inputSvgFile, outputSvgPath, x, y, width, height, quality, useWebpFormat);
 
-            int exitCode = svgToImage(inputSvgFile, outputSvgPath, x, y, width, height, quality);
-
+            String etag = getPathETag(outputSvgPath);
 
             if (exitCode == 0) {
                 FileResourceManager fileResourceManager = new FileResourceManager(outputSvgPath.getParent().toFile(),
                         1024 * 1024);
+                final String contentType = useWebpFormat ? "image/webp" : "image/jpeg";
                 Resource resource = fileResourceManager.getResource(outputSvgPath.getFileName().toString());
-                exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "image/jpeg");
+                exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, contentType);
                 exchange.getResponseHeaders().add(Headers.ETAG, etag.toString());
                 exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age:36500");
                 exchange.getResponseHeaders().add(Headers.CONTENT_LENGTH, outputSvgPath.toFile().length());
@@ -470,7 +491,7 @@ public class HmeServer {
         sessionConfig.setPath(FileUtils.endWithSlash(BASE_PATH));
         sessionConfig.setHttpOnly(true);
         final InMemorySessionManager sessionManager = new InMemorySessionManager("SessionManager", serverConfig.maxSessions());
-        sessionManager.setDefaultSessionTimeout(config.maxSessionInactivity());
+        sessionManager.setDefaultSessionTimeout(config.maxSessionInactivity() * 60);
         final SessionAttachmentHandler sessionHandler =
                 new SessionAttachmentHandler(Handlers.path().addPrefixPath(BASE_PATH, rootHandler),
                         sessionManager,
@@ -663,6 +684,42 @@ public class HmeServer {
         exchange.getResponseSender().send(metadata, IoCallback.END_EXCHANGE);
     }
 
+    @Value
+    static class ParameterAnnotation {
+        String paramUuid;
+        String unitsURI;
+        String meaningURI;
+
+    }
+    private static CompletableFuture<Map<String, List<ParameterAnnotation>>> getAnnotationsOfParameters(SemanticStore semanticStore) {
+
+        final String q = "PREFIX chic:  <http://www.chic-vph.eu/ontologies/resource#>\n" +
+                "select ?puuid ?muuid ?u ?t " +
+                "where {" +
+                "  ?p chic:parameterOfModel ?m ;" +
+                "   chic:parameterhasUnits ?u ; " +
+                "   chic:interpreted-type ?t ." +
+                "  ?p  chic:hasCHICuuid ?puuid ." +
+                "  ?m  chic:hasCHICuuid ?muuid ." +
+                "}";
+
+        final Function<Map<String, String>, ParameterAnnotation> mkAnnot =
+                m -> {
+                    final String paramUUID = m.get("puuid");
+                    final String unitsURI = m.get("u");
+                    final String meaningURI = m.get("t");
+                    return new ParameterAnnotation(paramUUID, unitsURI, meaningURI);
+                };
+        return
+                semanticStore.send_query_and_parse(q)
+                .thenApply(list -> list.stream()
+                        .collect(Collectors.groupingBy(
+                                m -> m.get("muuid"),
+                                Collectors.mapping(mkAnnot, Collectors.toList()))));
+
+
+    }
+
     private static CompletableFuture<List<Map<String, String>>> getAnnotationsOfModels(SemanticStore semanticStore) {
 
         final String q = "PREFIX chic:  <http://www.chic-vph.eu/ontologies/resource#>\n" +
@@ -757,20 +814,28 @@ public class HmeServer {
                 .exceptionally(ex -> {
                     log.error("Getting annotations ", ex);
 
-                    return Collections.<Map<String, String>>emptyList();
+                    return Collections.emptyList();
+                });
+        final CompletableFuture<Map<String, List<ParameterAnnotation>>> annotationsOfParamsPerModel =
+                getAnnotationsOfParameters(semanticStore)
+                .exceptionally(ex -> {
+                    log.error("Getting params annotations", ex);
+                    return Collections.emptyMap();
                 });
         final CompletableFuture<Map<UUID, Integer>> mapCompletableFuture = countHypermodelsPerModel(db);
         final CompletableFuture<Map<UUID, RepositoryId>> publishedHypermodelsFut = publishedHypermodels(db);
         final CompletableFuture<List<Model>> allModels = tokMgr.getDelegationToken(modelRepository.AUDIENCE, actAs.isPresent() ? actAs.get() : null)
                 .thenCompose(modelRepository::getAllModels);
 
-        CompletableFuture.allOf(allModels, publishedHypermodelsFut, mapCompletableFuture, annotationsOfModels)
+        CompletableFuture.allOf(allModels, publishedHypermodelsFut, mapCompletableFuture, annotationsOfModels, annotationsOfParamsPerModel)
                 .thenApply(aVoid -> {
                     final List<Model> models = allModels.join();
                     final Map<UUID, RepositoryId> published = publishedHypermodelsFut.join();
                     final Map<UUID, Integer> counts = mapCompletableFuture.join();
                     final List<Map<String, String>> annotations = annotationsOfModels.join();
+                    final Map<String, List<ParameterAnnotation>> paramAnnots = annotationsOfParamsPerModel.join();
 
+                    // System.err.println(":"); System.err.println(paramAnnots);
                     final Map<String, List<Map<String, String>>> annsPerModel = annotations.stream().collect(Collectors.groupingBy(m -> m.get("uuid")));
 
                     final List<JSONObject> jsonObjects = models.stream().map(model -> {
@@ -796,6 +861,35 @@ public class HmeServer {
                             json.put("perspectives", persp);
                         } else
                             json.put("perspectives", new JSONObject());
+
+                        if (paramAnnots.containsKey(uuid.toString())) {
+                            final List<ParameterAnnotation> parameterAnnotations = paramAnnots.get(uuid.toString());
+                            final Map<String, JSONObject> jsonObjectMap = parameterAnnotations.stream()
+                                    .collect(Collectors.toMap(ParameterAnnotation::getParamUuid,
+                                            (ParameterAnnotation p) -> {
+                                                final JSONObject o = new JSONObject();
+                                                o.put("meaning", p.getMeaningURI());
+                                                o.put("units", p.getUnitsURI());
+                                                return o;
+                                            }));
+                            final JSONArray inputs = (JSONArray) json.get("inPorts");
+                            inputs.forEach(o -> {
+                                final JSONObject p = (JSONObject) o;
+                                if (jsonObjectMap.containsKey(p.getAsString("uuid"))) {
+                                    p.putAll(jsonObjectMap.get(p.getAsString("uuid")));
+                                }
+                            });
+
+
+                            final JSONArray outputs = (JSONArray) json.get("outPorts");
+                            outputs.forEach(o -> {
+                                final JSONObject p = (JSONObject) o;
+                                if (jsonObjectMap.containsKey(p.getAsString("uuid"))) {
+                                    p.putAll(jsonObjectMap.get(p.getAsString("uuid")));
+                                }
+                            });
+
+                        }
                         return json;
 
                     }).collect(Collectors.toList());
@@ -1077,11 +1171,15 @@ public class HmeServer {
                 onError);
     }
 
-    private static Path previewPathFor(final UUID hypermodel_uid, long version)
+    private static Path previewPathFor(final UUID hypermodel_uid, long version, boolean isWebp)
     {
         Objects.requireNonNull(hypermodel_uid);
-        final String outputImgFilename = hypermodel_uid.toString() + "-" + version + ".jpg";
-        Path outputImgFile = previewsDir.resolve(outputImgFilename);
+        final String extension = isWebp ? "webp" : "jpg";
+
+        final String fn = hypermodel_uid.toString() + "-" + version;
+        final String outputImgFilename = fn + "." + extension;
+        final Path previewDir = previewsDir.resolve(fn);
+        Path outputImgFile = previewDir.resolve(outputImgFilename);
         return outputImgFile;
     }
 
@@ -1104,12 +1202,14 @@ public class HmeServer {
 
         final UUID uuid = uuidOptional.get();
         final Long version = getParam(exchange, "ver").map(Long::valueOf).orElse(0L);
+        final boolean useWebpFormat = getParam(exchange, "f").map("webp"::equals).orElse(false);
 
 //        String etag = queryParameters.entrySet().stream()
 //                .map(entry -> entry.getKey() + ":" + entry.getValue().getFirst())
 //                .collect(Collectors.joining("/"));
 
-        Path outputImgFile = previewPathFor(uuid, version);
+        Path outputImgFile = previewPathFor(uuid, version, useWebpFormat);
+        final Path previewDir = outputImgFile.getParent();
         String etag = getPathETag(outputImgFile);
         final ETag eTag = new ETag(false, etag);
 
@@ -1123,7 +1223,7 @@ public class HmeServer {
         }
 
         if (outputImgFile.toFile().exists()) {
-            FileResourceManager fileResourceManager = new FileResourceManager(previewsDir.toFile(),
+            FileResourceManager fileResourceManager = new FileResourceManager(previewDir.toFile(),
                     1024 * 1024);
             Resource resource = fileResourceManager.getResource(outputImgFile.getFileName().toString());
             exchange.getResponseHeaders().add(Headers.CACHE_CONTROL, "max-age=43200");
@@ -1158,9 +1258,10 @@ public class HmeServer {
 
 
                     try {
-                        Path inputSvgFile = Files.createTempFile("", ".svg");
+                        Files.createDirectories(previewDir);
+                        Path inputSvgFile = previewDir.resolve("canvas.svg");
                         Files.write(inputSvgFile, svgContentNoHtmlEntities.getBytes(StandardCharsets.UTF_8));
-                        executorService.submit(() -> previewSvg(exchange, inputSvgFile, outputImgFile, eTag));
+                        executorService.submit(() -> previewSvg(exchange, inputSvgFile, outputImgFile, useWebpFormat));
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
@@ -1323,7 +1424,7 @@ public class HmeServer {
 
                                         final String svgContentNoHtmlEntities = svgContent.replace("&nbsp;", " ");
 
-                                        final Path outputImgFile = previewPathFor(uuid, version);
+                                        final Path outputImgFile = previewPathFor(uuid, version, false);
 
                                         try {
                                             Path inputSvgFile = Files.createTempFile("", ".svg");

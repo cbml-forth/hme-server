@@ -253,7 +253,7 @@ public class ModelRepository implements AutoCloseable {
 
         final Model toModel = hypermodel.withPublishedRepoId(new RepositoryId(0)).toModel();
         final Model completeModel = toModel.withInputs(inputs).withOutputs(outputs);
-        System.err.println("--> " + toModel.toJSON().toJSONString());
+        System.err.println("--> " + completeModel.toJSON().toJSONString());
         return this.tokenManager
                 .getDelegationToken(this.AUDIENCE, actAsUser)
                 .thenCompose(token ->

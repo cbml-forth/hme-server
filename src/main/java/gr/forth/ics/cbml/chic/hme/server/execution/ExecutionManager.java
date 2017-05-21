@@ -55,7 +55,7 @@ public class ExecutionManager {
         final CompletableFuture<SAMLToken> modelRepoTokenFut = tokenManager.getDelegationToken(modelRepository.AUDIENCE, actAs);
         final CompletableFuture<SAMLToken> execTokenFut = tokenManager.getDelegationToken(execFramework.AUDIENCE, actAs);
         return CompletableFuture.allOf(expRepoTokenFut, modelRepoTokenFut, execTokenFut)
-                .thenCompose(__ -> {
+                .thenCompose(aVoid -> {
                     final SAMLToken modelRepoToken = modelRepoTokenFut.join();
                     final SAMLToken expRepoToken = expRepoTokenFut.join();
                     final SAMLToken execToken = execTokenFut.join();
