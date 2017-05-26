@@ -43,8 +43,11 @@ public interface HmeServerConfig extends Config, Accessible {
 
     String sparqlRicordo();
 
-    @DefaultValue("https://hme.chic-vph.eu/hme")
+    @DefaultValue("https://hme.chic-vph.eu")
     String serviceUrl();
+
+    @DefaultValue("/")
+    String basePath();
 
     @DefaultValue("https://cdr.chic-vph.eu/")
     URI cdrServiceUrl();

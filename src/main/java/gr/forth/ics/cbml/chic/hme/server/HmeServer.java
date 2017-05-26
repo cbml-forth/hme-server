@@ -62,6 +62,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -372,6 +373,8 @@ public class HmeServer {
 
         int port = serverConfig.port();
 
+        BASE_PATH = serverConfig.basePath();
+
         final Db database = init();
         final TokenManager tokenManager = new TokenManager(serverConfig.secureTokenService(),
                 serverConfig.serviceAccountName(),
@@ -388,7 +391,8 @@ public class HmeServer {
         log.info("RICORDO {} ", endpoint);
         final SemanticStore semanticStore = new SemanticStore(endpoint);
 
-        final Config samlConfig = new SamlConfigFactory("https://ssfak.duckdns.org/hme2/",
+        final URI rootEndpoint = URI.create(config.serviceUrl() + BASE_PATH).normalize();
+        final Config samlConfig = new SamlConfigFactory(rootEndpoint,
                 config.keystorePath(), config.keystorePassword(),
                 config.privateKeyPassword(), config.identityProviderMetadataPath()).build();
 
@@ -409,7 +413,10 @@ public class HmeServer {
                      getParam(exchange, "id")
                              .map(Long::valueOf)
                              .map(RepositoryId::new)
-                             .ifPresent(id -> modelRepository.getModel(id, "crafsrv")
+                             .ifPresent(id -> {
+                                 final String actAs = userName(exchange).get();
+                                 System.err.println("ACTAS:"+actAs);
+                                 modelRepository.getModel(id, actAs)
                                          .thenApply(Model::toJSON)
                                          .whenComplete((js, throwable) -> {
                                              if (throwable != null)
@@ -418,7 +425,8 @@ public class HmeServer {
                                                  exchange.getResponseHeaders().add(Headers.CONTENT_TYPE, "application/json");
                                                  exchange.getResponseSender().send(js.toJSONString(), IoCallback.END_EXCHANGE);
                                              }
-                                 }))))
+                                         });
+                             })))
 
                 .get("/hypermodels", exchange -> exchange.dispatch(() -> get_hypermodels(exchange, database)))
                 .post("/hypermodels", exchange -> exchange.dispatch(() -> save_hypermodel(exchange, database)))
